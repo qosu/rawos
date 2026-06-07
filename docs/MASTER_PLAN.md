@@ -91,9 +91,11 @@ Every primitive has: `id`, `user_id` (mandatory, multi-tenancy by construction),
 | Primary DB | SQLite → PostgreSQL | SQLite for V1 simplicity, migrate at scale |
 | Cache/Working memory | Redis | Pub/sub for real-time, fast session state |
 | Vector memory | ChromaDB (local) | Simple, no external service needed for V1 |
-| AI primary | deepseek-v4-pro | Already integrated, cost-effective |
-| AI fast | deepseek-v4-flash | Already integrated |
-| AI compression | Groq | Already integrated |
+| AI provider (sole, user-invisible) | DeepSeek | One provider, users never configure or see this |
+| AI primary model | deepseek-v4-pro | Complex tasks, primary reasoning |
+| AI fast model | deepseek-v4-flash | Quick responses, simple tasks, cost saving |
+| Internal compression (system-only) | Groq | Context summarization to reduce DeepSeek token cost — same role as in tg-claude. Never user-facing, never exposed. |
+| Embeddings | sentence-transformers local (all-MiniLM-L6-v2) | Free, no external API, no second provider dependency, sufficient for semantic memory |
 | Frontend | Next.js 14 + TypeScript | App Router, server components, industry standard |
 | UI components | Tailwind + shadcn/ui | Professional, accessible, fast to build |
 | Sandbox isolation | Docker per user | Hard isolation, cannot cross user boundaries |
