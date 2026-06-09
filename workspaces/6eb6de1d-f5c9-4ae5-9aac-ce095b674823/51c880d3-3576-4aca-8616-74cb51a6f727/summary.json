@@ -6,7 +6,7 @@
     "completed": 7159,
     "failed": 5958,
     "pending": 5087,
-    "success_rate_pct": 54.6
+    "success_rate_pct": 39.3
   },
   "papers_processed": 144007,
   "claims": {
@@ -33,7 +33,8 @@
     },
     "total": 7177,
     "auto_approve_pct": 26.3,
-    "escalate_pct": 71.7
+    "escalate_pct": 71.7,
+    "soft_approve_pct": 2.0
   },
   "owner_queue_size": 5120,
   "artifacts_written": 7165,

@@ -15,13 +15,15 @@ from datetime import datetime
 
 def format_duration(seconds):
     """Format a duration in seconds to a human-readable string."""
+    if seconds < 0:
+        return f"-{format_duration(-seconds)}"
     if seconds < 0.001:
         return f"{seconds * 1000:.1f}ms"
     if seconds < 1:
         return f"{seconds * 1000:.0f}ms"
     if seconds < 60:
         return f"{seconds:.2f}s"
-    return f"{seconds / 60:.1f}m {seconds % 60:.0f}s"
+    return f"{int(seconds // 60)}m {int(seconds % 60)}s"
 
 
 def collect_test_results(test_runner_result):

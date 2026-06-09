@@ -350,6 +350,86 @@ def _parse_verification_result(text: str) -> str | None:
     return None
 
 
+def _probe_repo_for_issues(workdir: str) -> dict:
+    """
+    Probe a git repo for concrete evidence: recent commits, diff stats, test failures.
+    Synchronous — intended to run in executor.
+    """
+    import subprocess as _sp
+    from rawos.kernel.context_reader import _detect_and_run_tests
+
+    result: dict = {
+        "workdir": workdir,
+        "commits": "",
+        "diff_stat": "",
+        "test_output": "",
+        "has_failures": False,
+    }
+    try:
+        r = _sp.run(
+            ["git", "-C", workdir, "log", "--oneline", "-10"],
+            capture_output=True, text=True, timeout=5,
+        )
+        result["commits"] = r.stdout.strip()
+    except Exception:
+        pass
+    try:
+        r = _sp.run(
+            ["git", "-C", workdir, "diff", "HEAD~1..HEAD", "--stat"],
+            capture_output=True, text=True, timeout=5,
+        )
+        result["diff_stat"] = r.stdout.strip()[:400]
+    except Exception:
+        pass
+    test_out = _detect_and_run_tests(workdir)
+    if test_out and test_out != "all tests passed":
+        result["test_output"] = test_out[:800]
+        result["has_failures"] = True
+    elif test_out == "all tests passed":
+        result["test_output"] = "all tests passed"
+    return result
+
+
+async def _select_entity_probe_target(user_id: str) -> dict | None:
+    """
+    Pick the most recently active watched repo (excluding rawos itself) and probe it.
+    Returns probe dict with evidence if repo has commit activity in last 7 days.
+    Returns None if no active repo found.
+    """
+    import asyncio as _aio
+    from pathlib import Path as _Path
+
+    with db._conn() as _conn:
+        rows = _conn.execute(
+            "SELECT path FROM watched_paths WHERE user_id=? AND active=1",
+            (user_id,),
+        ).fetchall()
+    if not rows:
+        return None
+
+    def _last_commit_ts(p: str) -> float:
+        try:
+            return _Path(p, ".git", "COMMIT_EDITMSG").stat().st_mtime
+        except OSError:
+            return 0.0
+
+    cutoff = time.time() - 7 * 86400
+    # Sort by recency, skip rawos own repo to prevent self-patching loop
+    candidates = sorted(
+        (r[0] for r in rows if r[0] != "/root/rawos"),
+        key=_last_commit_ts,
+        reverse=True,
+    )
+    active = [p for p in candidates if _last_commit_ts(p) > cutoff]
+    if not active:
+        return None
+
+    probe = await _aio.get_event_loop().run_in_executor(
+        None, _probe_repo_for_issues, active[0],
+    )
+    return probe if probe["commits"] else None
+
+
 def _log_episodic(
     user_id: str,
     trigger_type: str,
@@ -848,6 +928,29 @@ async def _run_proactive_agent(
         )
         return
 
+    # Phase 15: probe watched repos before firing agent on entity user.
+    # STUCK / ambient trigger with no specific trigger context — must find real evidence.
+    _entity_probe: dict | None = None
+    if (
+        user_id == RAWOS_ENTITY_USER_ID
+        and trigger_type in (None, "STUCK")
+        and not (trigger_ctx or {}).get("diff_hunk")
+        and not (trigger_ctx or {}).get("file")
+    ):
+        _entity_probe = await _select_entity_probe_target(user_id)
+        if _entity_probe is None:
+            _log_episodic(
+                user_id, trigger_type or "", intent_obj.domain, intent_obj.goal,
+                "silence", "entity-probe: no watched repo with recent activity",
+            )
+            log.info("rawos entity-probe: no target — SILENCE user=%s", user_id)
+            return
+        workdir = _entity_probe["workdir"]
+        log.info(
+            "rawos entity-probe: target=%s has_failures=%s user=%s",
+            workdir, _entity_probe["has_failures"], user_id,
+        )
+
     actions_str = "; ".join(intent_obj.suggested_actions) if intent_obj.suggested_actions else "analyze and summarize"
     message = (
         f"[Proactive analysis — {intent_obj.domain}]\n"
@@ -897,7 +1000,26 @@ async def _run_proactive_agent(
     # artifacts specific rather than generic.
     trigger_block = ""
     tc = trigger_ctx or {}
-    if trigger_type == "STUCK":
+    if _entity_probe:
+        _ep_workdir = _entity_probe["workdir"]
+        _ep_commits = _entity_probe["commits"] or "(none)"
+        trigger_block = (
+            "\n[TRIGGER: ENTITY PROBE — rawos autonomous scan]\n"
+            f"Target: {_ep_workdir}\n"
+            f"\nRecent commits:\n{_ep_commits}\n"
+        )
+        if _entity_probe["diff_stat"]:
+            _ep_diff = _entity_probe["diff_stat"]
+            trigger_block += f"\nLast commit diff:\n{_ep_diff}\n"
+        if _entity_probe["test_output"]:
+            _ep_status = "FAILURES FOUND" if _entity_probe["has_failures"] else "all tests passed"
+            _ep_tout = _entity_probe["test_output"]
+            trigger_block += f"\nTest status: {_ep_status}\n{_ep_tout}\n"
+        trigger_block += (
+            "\nTask: identify ONE concrete fixable issue from the above. "
+            "Nothing specific to fix? Choose SILENCE.\n"
+        )
+    elif trigger_type == "STUCK":
         trigger_block = (
             f"\n[TRIGGER: STUCK]\n"
             f"File: {tc.get('file', 'unknown')}\n"
