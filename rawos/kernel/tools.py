@@ -380,12 +380,33 @@ async def _deploy(params: dict[str, Any], workdir: str) -> ToolResult:
 _PROTECTED_BRANCHES: frozenset[str] = frozenset({"main", "master", "develop", "HEAD"})
 
 
+async def _targets_rawos_own_repo(workdir: str) -> bool:
+    """True if `workdir` is inside rawos's own live repo (/root/rawos).
+
+    rawos.service runs with WorkingDirectory=/root/rawos and Restart=always.
+    A `git checkout -b` or `git commit` whose repo root resolves to /root/rawos
+    mutates the live runtime tree and can crash-loop the entity itself.
+    """
+    res: BashResult = await run_bash("git rev-parse --show-toplevel", workdir)
+    return res.exit_code == 0 and res.stdout.strip() == "/root/rawos"
+
+
 async def _git_branch(params: dict[str, Any], workdir: str) -> ToolResult:
     """Create and switch to a new rawos/* branch in the project repo.
 
     Enforces the rawos/* namespace so autonomous commits stay isolated.
     params.name: optional suffix (default: fix-{timestamp}).
     """
+    if await _targets_rawos_own_repo(workdir):
+        return ToolResult(
+            output=(
+                "error: refusing to create a branch inside /root/rawos — "
+                "this is rawos's own live working tree (rawos.service runs "
+                "from here with Restart=always). SIGNAL instead."
+            ),
+            success=False, duration_ms=0,
+        )
+
     import time as _time
     import re   as _re
 
@@ -434,6 +455,16 @@ async def _git_commit(params: dict[str, Any], workdir: str) -> ToolResult:
     Uses rawos author identity so every autonomous commit is attributable.
     Returns the full git commit output (includes branch name and short hash).
     """
+    if await _targets_rawos_own_repo(workdir):
+        return ToolResult(
+            output=(
+                "error: refusing to commit inside /root/rawos — "
+                "this is rawos's own live working tree (rawos.service runs "
+                "from here with Restart=always). SIGNAL instead."
+            ),
+            success=False, duration_ms=0,
+        )
+
     import shlex as _shlex
 
     message = (params.get("message") or "rawos: autonomous fix").strip() or "rawos: autonomous fix"
