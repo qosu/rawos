@@ -96,6 +96,8 @@ class User(BaseModel):
     tier:               UserTier = UserTier.FREE
     token_budget_daily: int      = 100_000   # max tokens/day across all agents
     tokens_used_today:  int      = 0
+    is_admin:           bool     = False
+    stripe_customer_id: str | None = None
     created_at:         int      = Field(default_factory=_now)
     updated_at:         int      = Field(default_factory=_now)
 
@@ -115,6 +117,8 @@ class UserPublic(BaseModel):
     tier:               UserTier
     token_budget_daily: int
     tokens_used_today:  int
+    is_admin:           bool
+    stripe_customer_id: str | None
     created_at:         int
 
 
@@ -271,3 +275,23 @@ class Event(BaseModel):
     type:       EventType
     payload:    dict[str, Any] = Field(default_factory=dict)
     created_at: int        = Field(default_factory=_now)
+
+
+# ---------------------------------------------------------------------------
+# Phase 5: BillingEvent (immutable token consumption log)
+# ---------------------------------------------------------------------------
+
+class BillingEventType(str, Enum):
+    INTENT         = "intent"
+    MANUAL_CREDIT  = "manual_credit"
+    RESET          = "reset"
+
+
+class BillingEvent(BaseModel):
+    id:         str              = Field(default_factory=_uuid)
+    user_id:    str
+    intent_id:  str | None       = None
+    tokens:     int
+    model:      str              = ""
+    event_type: BillingEventType = BillingEventType.INTENT
+    created_at: int              = Field(default_factory=_now)

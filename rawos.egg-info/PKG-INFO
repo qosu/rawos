@@ -13,6 +13,7 @@ Requires-Dist: httpx>=0.28
 Requires-Dist: sse-starlette>=2.1
 Requires-Dist: aiofiles>=24.1
 Requires-Dist: sentence-transformers>=3.3
+Requires-Dist: chromadb>=0.6
 Provides-Extra: dev
 Requires-Dist: pytest>=8.3; extra == "dev"
 Requires-Dist: pytest-asyncio>=0.24; extra == "dev"

@@ -1,0 +1,47 @@
+{
+  "timestamp": "2026-06-09T19:44:10.912414+00:00",
+  "tasks_total": 18204,
+  "tasks_by_status": {
+    "completed": 7159,
+    "failed": 5958,
+    "pending": 5087
+  },
+  "events_by_type": {
+    "capability_granted": 159102,
+    "research_fetch": 143790,
+    "provider_call": 133664,
+    "task_created": 18204,
+    "queries_expanded": 18037,
+    "task_status_changed": 12888,
+    "tribunal_complete": 7177,
+    "policy_evaluated": 7177,
+    "paper_tex_written": 7163,
+    "paper_pdf_compiled": 7154,
+    "artifact_registered": 7135,
+    "policy_auto_published": 7133,
+    "embeddings_created": 7095,
+    "goal_generator_complete": 6837,
+    "claims_extracted_v2": 6149,
+    "owner_queue_added": 5156,
+    "claims_extracted": 2352,
+    "goal_generator_error": 310,
+    "archaeology_search_complete": 107,
+    "archaeology_scores_extracted": 95
+  },
+  "papers_processed": 144007,
+  "claims_extracted": 20007,
+  "claims_verified": 20958,
+  "tribunal_verdicts": {
+    "APPROVE": 1899,
+    "REJECT": 2736,
+    "REVISE": 2542
+  },
+  "policy_decisions": {
+    "AUTO_APPROVE": 1884,
+    "ESCALATE_TO_OWNER": 5148,
+    "SOFT_APPROVE": 145
+  },
+  "artifacts_written": 7165,
+  "owner_queue_size": 5120,
+  "uptime_hours": 95.015
+}

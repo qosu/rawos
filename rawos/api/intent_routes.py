@@ -1,24 +1,33 @@
 """
-Intent route — the core of rawos.
-POST /intent  →  SSE stream of AI response tokens.
-Loads project memory, streams DeepSeek response, persists exchange.
+Intent route — core of rawos.
+Phase 3: context enriched with semantic memory retrieval.
+POST /intent → SSE stream of agent events.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
+from pathlib import Path
+from typing import AsyncIterator
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 import rawos.db as db
-from rawos.ai_engine import AIError, stream_response
+from rawos import billing
+from rawos import monitoring
 from rawos.api.deps import current_user
+from rawos.config import settings
+from rawos.kernel import agent_loop
+from rawos.kernel import orchestrator, context_builder, memory_index
+from rawos.kernel.summarizer import summarize_memories
 from rawos.models import (
-    Agent, AgentStatus, Event, EventType,
-    Intent, IntentStatus, Memory, MemoryTier, MessageRole, User,
+    Agent, AgentStatus, Artifact, ArtifactType,
+    Event, EventType, Intent, IntentStatus,
+    Memory, MemoryTier, MessageRole, User,
 )
 
 log = logging.getLogger("rawos.intent")
@@ -31,134 +40,263 @@ class IntentRequest(BaseModel):
     model:      str | None = None
 
 
-def _build_messages(project_id: str, user_id: str, new_message: str) -> list[dict]:
-    """Load episodic memory for project and append new user message."""
-    memories = db.get_project_memories(user_id, project_id, tier="episodic", limit=60)
-    messages = []
-    for m in memories:
-        content = m.content
-        if isinstance(content, str):
-            messages.append({"role": m.role.value, "content": content})
-        else:
-            messages.append({"role": m.role.value, "content": content})
-    messages.append({"role": "user", "content": new_message})
-    return messages
+# ---------------------------------------------------------------------------
+# Background tasks
+# ---------------------------------------------------------------------------
+
+async def _index_memories_bg(user_id: str, project_id: str, memory_ids: list[str]) -> None:
+    """Index newly saved memories into ChromaDB (runs after SSE stream completes)."""
+    for mid in memory_ids:
+        m = db.get_memory_by_id(user_id, mid)
+        if m is None:
+            continue
+        content = m.content if isinstance(m.content, str) else json.dumps(m.content)
+        memory_index.upsert_memory(
+            memory_id=m.id,
+            text=content,
+            project_id=project_id,
+            user_id=user_id,
+            tier=m.tier.value,
+            role=m.role.value,
+            created_at=m.created_at,
+        )
 
 
-async def _intent_sse(
+async def _index_files_bg(user_id: str, project_id: str) -> None:
+    """Re-index any project files that are new or changed."""
+    artifacts = db.get_project_artifacts(user_id, project_id)
+    for artifact in artifacts:
+        if not artifact.path:
+            continue
+        p = Path(artifact.path)
+        if not p.exists() or not p.is_file():
+            continue
+        try:
+            content = p.read_text(encoding="utf-8", errors="replace")
+            if content.strip():
+                memory_index.upsert_file(
+                    file_id=artifact.id,
+                    content=content,
+                    project_id=project_id,
+                    user_id=user_id,
+                    file_path=artifact.name,
+                    file_name=artifact.name,
+                )
+        except OSError:
+            pass
+
+
+async def _maybe_summarize_bg(user_id: str, project_id: str) -> None:
+    """
+    If episodic memory count exceeds threshold, summarise the oldest N memories
+    and replace them with a single semantic summary.
+    """
+    count = db.get_memory_count(user_id, project_id)
+    if count <= settings.summarize_after_n_memories:
+        return
+
+    oldest = db.get_episodic_oldest(user_id, project_id, settings.summarize_oldest_n)
+    if len(oldest) < 10:   # not enough to bother summarising
+        return
+
+    log.info("summarising %d memories for project %s", len(oldest), project_id)
+    summary_text = await summarize_memories(oldest)
+    if not summary_text.strip():
+        log.warning("summarisation returned empty text for project %s", project_id)
+        return
+
+    # Save summary as semantic memory
+    summary_mem = Memory(
+        user_id=user_id,
+        project_id=project_id,
+        tier=MemoryTier.SEMANTIC,
+        role=MessageRole.SYSTEM,
+        content=summary_text,
+    )
+    db.save_memory(summary_mem)
+    memory_index.upsert_memory(
+        memory_id=summary_mem.id,
+        text=summary_text,
+        project_id=project_id,
+        user_id=user_id,
+        tier="semantic",
+        role="system",
+        created_at=summary_mem.created_at,
+    )
+
+    # Delete the original episodic memories
+    ids_to_delete = [m.id for m in oldest]
+    db.delete_memories_batch(user_id, ids_to_delete)
+    memory_index.delete_memories_batch(ids_to_delete)
+
+    log.info(
+        "summarised %d→1 memories for project %s (saved %d chars)",
+        len(oldest), project_id, len(summary_text),
+    )
+
+
+# ---------------------------------------------------------------------------
+# SSE generator
+# ---------------------------------------------------------------------------
+
+async def _sse_generator(
     user: User,
     project_id: str,
     raw_message: str,
     model: str | None,
 ) -> AsyncIterator[str]:
-    # Validate project belongs to user
+    _intent_start = time.perf_counter()
+    monitoring.active_sse_connections.inc()
+    try:
+        async for chunk in _sse_generator_inner(user, project_id, raw_message, model):
+            yield chunk
+    finally:
+        monitoring.active_sse_connections.dec()
+        monitoring.intent_duration_seconds.labels(model=model or "default").observe(
+            time.perf_counter() - _intent_start
+        )
+
+
+async def _sse_generator_inner(
+    user: User,
+    project_id: str,
+    raw_message: str,
+    model: str | None,
+) -> AsyncIterator[str]:
+
     project = db.get_project(user.id, project_id)
     if not project:
-        yield f"data: {json.dumps({'error': 'project not found'})}\n\n"
+        yield f"data: {json.dumps({'type': 'error', 'message': 'project not found'})}\n\n"
+        return
+    if not project.workdir:
+        yield f"data: {json.dumps({'type': 'error', 'message': 'project workdir not initialised'})}\n\n"
         return
 
-    # Create intent record
-    intent = Intent(
-        user_id=user.id,
-        project_id=project_id,
-        raw_text=raw_message,
-        status=IntentStatus.ROUTING,
-    )
+    # Create intent + agent records
+    intent = Intent(user_id=user.id, project_id=project_id, raw_text=raw_message,
+                    status=IntentStatus.ROUTING)
     db.create_intent(intent)
 
-    # Create agent for this intent
-    agent = Agent(
-        user_id=user.id,
-        project_id=project_id,
-        goal=raw_message[:200],
-        model=model or "deepseek-chat",
-    )
+    agent = Agent(user_id=user.id, project_id=project_id, goal=raw_message[:200],
+                  model=model or settings.deepseek_model_pro)
     agent = agent.transition(AgentStatus.ACTIVE)
     db.create_agent(agent)
     db.update_intent(user.id, intent.id, agent_id=agent.id, status=IntentStatus.EXECUTING)
-
-    # Log agent started
-    db.log_event(Event(
-        user_id=user.id,
-        project_id=project_id,
-        agent_id=agent.id,
-        type=EventType.AGENT_STARTED,
-        payload={"intent_id": intent.id},
-    ))
+    db.log_event(Event(user_id=user.id, project_id=project_id, agent_id=agent.id,
+                       type=EventType.AGENT_STARTED, payload={"intent_id": intent.id}))
 
     # Save user message to episodic memory
-    db.save_memory(Memory(
-        user_id=user.id,
-        project_id=project_id,
-        agent_id=agent.id,
-        tier=MemoryTier.EPISODIC,
-        role=MessageRole.USER,
-        content=raw_message,
-    ))
+    user_mem = Memory(user_id=user.id, project_id=project_id, agent_id=agent.id,
+                      tier=MemoryTier.EPISODIC, role=MessageRole.USER, content=raw_message)
+    db.save_memory(user_mem)
 
-    # Build message history and stream response
-    messages = _build_messages(project_id, user.id, raw_message)
-    # Remove the user message we just added above (already in messages)
-    # Actually _build_messages includes new_message at the end already.
-    # But we ALSO saved it to DB above. On next call it'll be in episodic.
-    # Here we pass messages directly — includes history + new user msg.
+    # Build enriched context (recent history + semantic retrieval)
+    messages, system_ctx = context_builder.build_context(user.id, project_id, raw_message)
+    # Remove the just-saved user message from history to avoid duplication
+    if messages and messages[-1]["role"] == "user" and messages[-1]["content"] == raw_message:
+        messages = messages[:-1]
+    messages.append({"role": "user", "content": raw_message})
 
-    full_response: list[str] = []
+    # Enrich system prompt with semantic context
+    from rawos.kernel.agent_loop import _SYSTEM_PROMPT as BASE_PROMPT
+    enriched_system = BASE_PROMPT + system_ctx if system_ctx else None
+
+    chosen_model = model or settings.deepseek_model_pro
     error_occurred = False
+    response_chunks: list[str] = []
+
+    async def on_artifact(af_meta: dict) -> Artifact:
+        art = Artifact(
+            user_id=user.id, project_id=project_id, agent_id=agent.id,
+            intent_id=intent.id,
+            type=ArtifactType.FILE,
+            name=af_meta["name"],
+            path=af_meta["path"],
+            mime_type=af_meta["mime_type"],
+            size_bytes=af_meta["size_bytes"],
+        )
+        db.save_artifact(art)
+        return art
 
     try:
-        async for chunk in stream_response(messages[:-1] + [{"role": "user", "content": raw_message}], model=model):
-            full_response.append(chunk)
-            yield f"data: {json.dumps({'chunk': chunk})}\n\n"
-    except AIError as e:
-        log.error("AI engine error: %s", e)
-        error_occurred = True
-        yield f"data: {json.dumps({'error': str(e)})}\n\n"
-
-    # Persist assistant response
-    if full_response:
-        assistant_text = "".join(full_response)
-        db.save_memory(Memory(
+        async for event in orchestrator.run(
             user_id=user.id,
             project_id=project_id,
-            agent_id=agent.id,
-            tier=MemoryTier.EPISODIC,
-            role=MessageRole.ASSISTANT,
-            content=assistant_text,
-        ))
+            intent_id=intent.id,
+            messages=messages,
+            workdir=project.workdir,
+            model=chosen_model,
+            on_artifact=on_artifact,
+            system_prompt=enriched_system,
+        ):
+            if event["type"] == "chunk":
+                response_chunks.append(event["text"])
+            elif event["type"] == "error":
+                error_occurred = True
 
-    # Finalize
+            db.log_event(Event(
+                user_id=user.id, project_id=project_id, agent_id=agent.id,
+                type=EventType.TOOL_CALLED if event["type"] == "tool_call" else EventType.TASK_COMPLETED,
+                payload=event,
+            ))
+            yield f"data: {json.dumps(event)}\n\n"
+
+    except Exception as e:
+        log.exception("agent loop uncaught: %s", e)
+        error_occurred = True
+        yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+
+    # Persist assistant response
+    asst_mem_id = None
+    if response_chunks:
+        asst_mem = Memory(
+            user_id=user.id, project_id=project_id, agent_id=agent.id,
+            tier=MemoryTier.EPISODIC, role=MessageRole.ASSISTANT,
+            content="".join(response_chunks),
+        )
+        db.save_memory(asst_mem)
+        asst_mem_id = asst_mem.id
+
+    # Finalise records
     final_status = IntentStatus.FAILED if error_occurred else IntentStatus.COMPLETED
     db.update_intent(user.id, intent.id, status=final_status)
     db.update_agent_status(user.id, agent.id, AgentStatus.ARCHIVED)
-
     db.log_event(Event(
-        user_id=user.id,
-        project_id=project_id,
-        agent_id=agent.id,
-        type=EventType.TASK_COMPLETED if not error_occurred else EventType.ERROR,
-        payload={"intent_id": intent.id, "response_chars": len("".join(full_response))},
+        user_id=user.id, project_id=project_id, agent_id=agent.id,
+        type=EventType.ERROR if error_occurred else EventType.TASK_COMPLETED,
+        payload={"intent_id": intent.id, "chars": len("".join(response_chunks))},
     ))
 
-    yield f"data: {json.dumps({'done': True, 'intent_id': intent.id})}\n\n"
+    # Record token usage for billing and metrics
+    if response_chunks:
+        # Approximate: 1 token ≈ 4 chars (rough but consistent)
+        approx_tokens = max(1, len("".join(response_chunks)) // 4)
+        billing.record_usage(user.id, approx_tokens, model=chosen_model, intent_id=intent.id)
+        monitoring.intent_tokens_total.labels(
+            model=chosen_model, user_tier=user.tier.value
+        ).inc(approx_tokens)
 
-
-# Python requires this import at module level — fix the generator type hint
-from typing import AsyncIterator  # noqa: E402
+    # Background: index new memories + files into ChromaDB, maybe summarise
+    new_ids = [user_mem.id] + ([asst_mem_id] if asst_mem_id else [])
+    asyncio.create_task(_index_memories_bg(user.id, project_id, new_ids))
+    asyncio.create_task(_index_files_bg(user.id, project_id))
+    asyncio.create_task(_maybe_summarize_bg(user.id, project_id))
 
 
 @router.post("")
 async def create_intent(body: IntentRequest, user: User = Depends(current_user)):
     try:
-        intent_obj = Intent(user_id=user.id, project_id=body.project_id, raw_text=body.message)
+        Intent(user_id=user.id, project_id=body.project_id, raw_text=body.message)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+    try:
+        billing.check_quota(user.id, user.tier.value)
+    except billing.QuotaExceeded as e:
+        raise HTTPException(status_code=429, detail=str(e))
+
     return StreamingResponse(
-        _intent_sse(user, body.project_id, body.message, body.model),
+        _sse_generator(user, body.project_id, body.message, body.model),
         media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-        },
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

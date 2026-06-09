@@ -1,0 +1,52 @@
+# rawos:target=/root/sovereign-research-kernel/metrics/metrics.json
+# rawos:ts=1781028831
+# rawos:description=Diagnose assignee-server service failure and generate reports
+# rawos:type=code_fix
+
+{
+  "timestamp": "2026-06-09T18:10:36.346766+00:00",
+  "tasks_total": 18103,
+  "tasks_by_status": {
+    "completed": 7110,
+    "failed": 5956,
+    "pending": 5037
+  },
+  "events_by_type": {
+    "capability_granted": 158224,
+    "research_fetch": 143018,
+    "provider_call": 132622,
+    "task_created": 18103,
+    "queries_expanded": 17936,
+    "task_status_changed": 12837,
+    "tribunal_complete": 7128,
+    "policy_evaluated": 7128,
+    "paper_tex_written": 7114,
+    "paper_pdf_compiled": 7105,
+    "artifact_registered": 7086,
+    "policy_auto_published": 7084,
+    "embeddings_created": 7054,
+    "goal_generator_complete": 6788,
+    "claims_extracted_v2": 6086,
+    "owner_queue_added": 5107,
+    "claims_extracted": 2352,
+    "goal_generator_error": 310,
+    "archaeology_search_complete": 106,
+    "archaeology_scores_extracted": 94
+  },
+  "papers_processed": 142511,
+  "claims_extracted": 20007,
+  "claims_verified": 20007,
+  "tribunal_verdicts": {
+    "APPROVE": 1899,
+    "REJECT": 2710,
+    "REVISE": 2519
+  },
+  "policy_decisions": {
+    "AUTO_APPROVE": 1884,
+    "ESCALATE_TO_OWNER": 5099,
+    "SOFT_APPROVE": 145
+  },
+  "artifacts_written": 7116,
+  "owner_queue_size": 5071,
+  "uptime_hours": 93.455
+}

@@ -18,6 +18,7 @@ dependencies = [
     "sse-starlette>=2.1",
     "aiofiles>=24.1",
     "sentence-transformers>=3.3",
+    "chromadb>=0.6",
 ]
 
 [project.optional-dependencies]
@@ -35,3 +36,6 @@ testpaths = ["tests"]
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["rawos*"]
+
+[project.scripts]
+rawos = "rawos.cli.main:main"

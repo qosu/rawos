@@ -1,0 +1,57 @@
+# rawos:target=/root/sovereign-research-kernel/metrics/report.html
+# rawos:ts=1781023440
+# rawos:description=debug assignee-server service failure and generate reports
+# rawos:type=code_fix
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SOVEREIGN Research Kernel — Metrics</title>
+<style>
+body{font-family:'Courier New',monospace;background:#0a0a0a;color:#e0e0e0;margin:0;padding:24px;}
+h1{color:#00ff88;font-size:1.4rem;border-bottom:1px solid #333;padding-bottom:8px;}
+h2{color:#88aaff;font-size:1rem;margin-top:24px;}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px;margin:16px 0;}
+.card{background:#141414;border:1px solid #222;border-radius:6px;padding:14px;}
+.card .val{font-size:2rem;font-weight:bold;color:#00ff88;}
+.card .lbl{font-size:0.75rem;color:#888;margin-top:4px;}
+.bar-wrap{display:flex;align-items:center;gap:8px;margin:4px 0;}
+.bar{height:18px;background:#00ff88;border-radius:3px;min-width:2px;}
+.bar-lbl{font-size:0.75rem;color:#888;min-width:60px;}
+.bar-val{font-size:0.75rem;color:#ccc;}
+.ts{font-size:0.7rem;color:#555;margin-top:24px;}
+.approve{color:#00ff88;}.revise{color:#ffaa00;}.reject{color:#ff4444;}
+</style>
+</head>
+<body>
+<h1>SOVEREIGN Research Kernel</h1>
+<p style="color:#555;font-size:0.8rem">Generated: 2026-06-09 16:42 UTC</p>
+<h2>Session Overview</h2>
+<div class="grid">
+<div class="card"><div class="val">17985</div><div class="lbl">Tasks Total</div></div>
+<div class="card"><div class="val">140769</div><div class="lbl">Papers Processed</div></div>
+<div class="card"><div class="val">20886</div><div class="lbl">Claims Verified</div></div>
+<div class="card"><div class="val">5009</div><div class="lbl">Owner Queue Pending</div></div>
+<div class="card"><div class="val">7065</div><div class="lbl">Tribunal Reviews</div></div>
+<div class="card"><div class="val">5.5/10</div><div class="lbl">Avg Tribunal Score</div></div>
+</div>
+<h2>Tribunal Verdict Distribution</h2>
+<div class="grid">
+<div class="card"><div class="val approve">1899</div><div class="lbl">APPROVE (27%)</div></div>
+<div class="card"><div class="val revise">2499</div><div class="lbl">REVISE</div></div>
+<div class="card"><div class="val reject">2667</div><div class="lbl">REJECT</div></div>
+<div class="card"><div class="val">0.39</div><div class="lbl">Avg Revision Rounds</div></div>
+</div>
+<h2>Policy Gate Distribution</h2>
+<div class="grid">
+<div class="card"><div class="val approve">1884</div><div class="lbl">AUTO_APPROVE</div></div>
+<div class="card"><div class="val revise">5037</div><div class="lbl">ESCALATE_TO_OWNER</div></div>
+<div class="card"><div class="val reject">0</div><div class="lbl">AUTO_REJECT</div></div>
+</div>
+<h2>Tribunal Score Histogram</h2>
+<div class="bar-wrap"><span class="bar-lbl">0-2</span><div class="bar" style="width:12px"></div><span class="bar-val">141</span></div><div class="bar-wrap"><span class="bar-lbl">2-4</span><div class="bar" style="width:176px"></div><span class="bar-val">1929</span></div><div class="bar-wrap"><span class="bar-lbl">4-6</span><div class="bar" style="width:200px"></div><span class="bar-val">2181</span></div><div class="bar-wrap"><span class="bar-lbl">6-8</span><div class="bar" style="width:132px"></div><span class="bar-val">1443</span></div><div class="bar-wrap"><span class="bar-lbl">8-10</span><div class="bar" style="width:125px"></div><span class="bar-val">1371</span></div>
+<p class="ts">SOVEREIGN Research Kernel v6 | 3 parallel workers | Tribunal v2 threshold=6.5 | PolicyGate v2</p>
+</body>
+</html>

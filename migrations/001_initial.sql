@@ -156,3 +156,7 @@ CREATE TABLE IF NOT EXISTS refresh_tokens (
 );
 
 CREATE INDEX IF NOT EXISTS idx_refresh_user ON refresh_tokens(user_id);
+
+-- Phase 3 performance indexes
+CREATE INDEX IF NOT EXISTS idx_memories_project_tier_time ON memories(project_id, tier, created_at ASC);
+CREATE INDEX IF NOT EXISTS idx_memories_project_time     ON memories(project_id, created_at DESC);

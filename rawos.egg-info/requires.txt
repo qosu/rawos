@@ -9,6 +9,7 @@ httpx>=0.28
 sse-starlette>=2.1
 aiofiles>=24.1
 sentence-transformers>=3.3
+chromadb>=0.6
 
 [dev]
 pytest>=8.3

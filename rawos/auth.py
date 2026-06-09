@@ -115,6 +115,9 @@ def signup(email: str, password: str) -> tuple[User, str, str]:
         )
     except (ValidationError, ValueError) as e:
         raise AuthError(str(e)) from e
+    # Grant admin if email is in the admin_emails allowlist
+    if email.lower() in [e.lower() for e in settings.admin_emails]:
+        user = user.model_copy(update={"is_admin": True})
     db.create_user(user)
     db.log_event(Event(user_id=user.id, type=EventType.AUTH_SIGNUP))
 

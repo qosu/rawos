@@ -27,11 +27,29 @@ def init(db_path: str | Path) -> None:
 
 
 def _apply_schema() -> None:
-    # __file__ = rawos/db/__init__.py → go up 3 levels to project root
-    schema_path = Path(__file__).parent.parent.parent / "migrations" / "001_initial.sql"
-    schema_sql = schema_path.read_text()
-    with _conn() as conn:
-        conn.executescript(schema_sql)
+    """
+    Apply all SQL migrations in alphabetical order.
+    Skips files prefixed 'postgres_' (PostgreSQL-only).
+    For ALTER TABLE statements, silently ignores 'duplicate column' errors.
+    """
+    import re as _re
+    migrations_dir = Path(__file__).parent.parent.parent / "migrations"
+    for migration_file in sorted(migrations_dir.glob("*.sql")):
+        if migration_file.name.startswith("postgres_"):
+            continue
+        sql = migration_file.read_text()
+        # Split into individual statements so we can handle errors per-statement
+        statements = [s.strip() for s in _re.split(r";\s*(?:\n|$)", sql) if s.strip()]
+        with _conn() as conn:
+            for stmt in statements:
+                try:
+                    conn.execute(stmt)
+                except Exception as e:
+                    err = str(e).lower()
+                    # Idempotent: ignore "already exists" and "duplicate column" errors
+                    if "already exists" in err or "duplicate column" in err:
+                        continue
+                    raise
 
 
 @contextmanager
@@ -64,11 +82,12 @@ def create_user(user: User) -> User:
         conn.execute(
             """INSERT INTO users
                (id, email, password_hash, tier, token_budget_daily,
-                tokens_used_today, budget_reset_date, created_at, updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?)""",
+                tokens_used_today, budget_reset_date, is_admin, stripe_customer_id, created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
             (user.id, user.email, user.password_hash, user.tier.value,
              user.token_budget_daily, user.tokens_used_today,
-             "", user.created_at, user.updated_at),
+             "", 1 if user.is_admin else 0, user.stripe_customer_id,
+             user.created_at, user.updated_at),
         )
     return user
 
@@ -109,12 +128,31 @@ def reset_daily_budget(user_id: str) -> None:
 
 
 def _row_to_user(row: sqlite3.Row) -> User:
+    keys = row.keys()
     return User(
         id=row["id"], email=row["email"], password_hash=row["password_hash"],
         tier=row["tier"], token_budget_daily=row["token_budget_daily"],
         tokens_used_today=row["tokens_used_today"],
+        is_admin=bool(row["is_admin"]) if "is_admin" in keys else False,
+        stripe_customer_id=row["stripe_customer_id"] if "stripe_customer_id" in keys else None,
         created_at=row["created_at"], updated_at=row["updated_at"],
     )
+
+
+def set_admin(user_id: str, is_admin: bool) -> None:
+    with _conn() as conn:
+        conn.execute(
+            "UPDATE users SET is_admin = ?, updated_at = ? WHERE id = ?",
+            (1 if is_admin else 0, _now(), user_id),
+        )
+
+
+def get_all_users(limit: int = 200) -> list:
+    with _conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM users ORDER BY created_at DESC LIMIT ?", (limit,)
+        ).fetchall()
+    return [_row_to_user(r) for r in rows]
 
 
 # ---------------------------------------------------------------------------
@@ -368,3 +406,280 @@ def get_refresh_token(token_hash: str) -> dict | None:
 def revoke_refresh_token(token_hash: str) -> None:
     with _conn() as conn:
         conn.execute("DELETE FROM refresh_tokens WHERE token_hash = ?", (token_hash,))
+
+
+# ---------------------------------------------------------------------------
+# Artifacts
+# ---------------------------------------------------------------------------
+
+def save_artifact(artifact: Artifact) -> Artifact:
+    with _conn() as conn:
+        conn.execute(
+            """INSERT INTO artifacts
+               (id, user_id, project_id, agent_id, intent_id, type, name,
+                path, content, mime_type, size_bytes, created_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (artifact.id, artifact.user_id, artifact.project_id,
+             artifact.agent_id, artifact.intent_id, artifact.type.value,
+             artifact.name, artifact.path, artifact.content,
+             artifact.mime_type, artifact.size_bytes, artifact.created_at),
+        )
+    return artifact
+
+
+def get_artifact(user_id: str, artifact_id: str) -> Artifact | None:
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM artifacts WHERE id = ? AND user_id = ?",
+            (artifact_id, user_id),
+        ).fetchone()
+    return _row_to_artifact(row) if row else None
+
+
+def get_project_artifacts(user_id: str, project_id: str) -> list[Artifact]:
+    with _conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM artifacts WHERE user_id = ? AND project_id = ? ORDER BY created_at DESC",
+            (user_id, project_id),
+        ).fetchall()
+    return [_row_to_artifact(r) for r in rows]
+
+
+def delete_artifact(user_id: str, artifact_id: str) -> bool:
+    with _conn() as conn:
+        cursor = conn.execute(
+            "DELETE FROM artifacts WHERE id = ? AND user_id = ?",
+            (artifact_id, user_id),
+        )
+    return cursor.rowcount > 0
+
+
+def _row_to_artifact(row: sqlite3.Row) -> Artifact:
+    from rawos.models import ArtifactType
+    return Artifact(
+        id=row["id"], user_id=row["user_id"], project_id=row["project_id"],
+        agent_id=row["agent_id"], intent_id=row["intent_id"],
+        type=ArtifactType(row["type"]), name=row["name"],
+        path=row["path"], content=row["content"],
+        mime_type=row["mime_type"], size_bytes=row["size_bytes"],
+        created_at=row["created_at"],
+    )
+
+
+# ---------------------------------------------------------------------------
+# Memory — Phase 3 additions
+# ---------------------------------------------------------------------------
+
+def get_all_project_memories(user_id: str, project_id: str, limit: int = 200) -> list[Memory]:
+    """All tiers, newest first, for memory UI."""
+    with _conn() as conn:
+        rows = conn.execute(
+            """SELECT * FROM memories
+               WHERE project_id = ? AND user_id = ?
+               AND (expires_at IS NULL OR expires_at > ?)
+               ORDER BY created_at DESC LIMIT ?""",
+            (project_id, user_id, _now(), limit),
+        ).fetchall()
+    return [_row_to_memory(r) for r in rows]
+
+
+def get_episodic_oldest(user_id: str, project_id: str, n: int) -> list[Memory]:
+    """Return the n oldest episodic memories for summarization."""
+    with _conn() as conn:
+        rows = conn.execute(
+            """SELECT * FROM memories
+               WHERE project_id = ? AND user_id = ? AND tier = 'episodic'
+               ORDER BY created_at ASC LIMIT ?""",
+            (project_id, user_id, n),
+        ).fetchall()
+    return [_row_to_memory(r) for r in rows]
+
+
+def get_memory_count(user_id: str, project_id: str) -> int:
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) FROM memories WHERE project_id = ? AND user_id = ?",
+            (project_id, user_id),
+        ).fetchone()
+    return row[0] if row else 0
+
+
+def get_memory_by_id(user_id: str, memory_id: str) -> Memory | None:
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM memories WHERE id = ? AND user_id = ?",
+            (memory_id, user_id),
+        ).fetchone()
+    return _row_to_memory(row) if row else None
+
+
+def delete_memory_record(user_id: str, memory_id: str) -> bool:
+    with _conn() as conn:
+        cursor = conn.execute(
+            "DELETE FROM memories WHERE id = ? AND user_id = ?",
+            (memory_id, user_id),
+        )
+    return cursor.rowcount > 0
+
+
+def delete_memories_batch(user_id: str, memory_ids: list[str]) -> int:
+    if not memory_ids:
+        return 0
+    placeholders = ",".join("?" * len(memory_ids))
+    with _conn() as conn:
+        cursor = conn.execute(
+            f"DELETE FROM memories WHERE user_id = ? AND id IN ({placeholders})",
+            [user_id] + list(memory_ids),
+        )
+    return cursor.rowcount
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 — Agent tree queries
+# ---------------------------------------------------------------------------
+
+def get_project_agents(user_id: str, project_id: str, limit: int = 50) -> list:
+    from rawos.models import Agent as AgentModel
+    with _conn() as conn:
+        rows = conn.execute(
+            """SELECT * FROM agents
+               WHERE user_id = ? AND project_id = ?
+               ORDER BY created_at DESC
+               LIMIT ?""",
+            (user_id, project_id, limit),
+        ).fetchall()
+    return [_row_to_agent(r) for r in rows]
+
+
+def get_agent_children(user_id: str, parent_id: str) -> list:
+    with _conn() as conn:
+        rows = conn.execute(
+            """SELECT * FROM agents
+               WHERE user_id = ? AND parent_id = ?
+               ORDER BY created_at ASC""",
+            (user_id, parent_id),
+        ).fetchall()
+    return [_row_to_agent(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 — Billing events
+# ---------------------------------------------------------------------------
+
+def create_billing_event(user_id: str, tokens: int, model: str = "",
+                          intent_id: str | None = None,
+                          event_type: str = "intent") -> None:
+    from rawos.models import BillingEvent
+    ev = BillingEvent(user_id=user_id, intent_id=intent_id,
+                      tokens=tokens, model=model, event_type=event_type)
+    with _conn() as conn:
+        conn.execute(
+            """INSERT INTO billing_events (id, user_id, intent_id, tokens, model, event_type, created_at)
+               VALUES (?,?,?,?,?,?,?)""",
+            (ev.id, ev.user_id, ev.intent_id, ev.tokens, ev.model, ev.event_type.value, ev.created_at),
+        )
+
+
+def get_billing_events(user_id: str, limit: int = 100) -> list:
+    from rawos.models import BillingEvent
+    with _conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM billing_events WHERE user_id = ? ORDER BY created_at DESC LIMIT ?",
+            (user_id, limit),
+        ).fetchall()
+    return [BillingEvent(
+        id=r["id"], user_id=r["user_id"], intent_id=r["intent_id"],
+        tokens=r["tokens"], model=r["model"], event_type=r["event_type"],
+        created_at=r["created_at"],
+    ) for r in rows]
+
+
+def get_admin_stats() -> dict:
+    """Aggregate stats for admin dashboard."""
+    import time
+    today_start = int(time.time()) - 86400
+    with _conn() as conn:
+        users_total  = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+        intents_today = conn.execute(
+            "SELECT COUNT(*) FROM intents WHERE created_at > ?", (today_start,)
+        ).fetchone()[0]
+        tokens_today = conn.execute(
+            "SELECT COALESCE(SUM(tokens), 0) FROM billing_events WHERE created_at > ?", (today_start,)
+        ).fetchone()[0]
+        errors_today = conn.execute(
+            "SELECT COUNT(*) FROM events WHERE type = 'error' AND created_at > ?", (today_start,)
+        ).fetchone()[0]
+        active_agents = conn.execute(
+            "SELECT COUNT(*) FROM agents WHERE status = 'active'"
+        ).fetchone()[0]
+    return {
+        "users_total":   users_total,
+        "intents_today": intents_today,
+        "tokens_today":  tokens_today,
+        "errors_today":  errors_today,
+        "active_agents": active_agents,
+    }
+
+
+def get_recent_errors(limit: int = 50) -> list[dict]:
+    """Return recent error events from the audit log."""
+    with _conn() as conn:
+        rows = conn.execute(
+            """SELECT id, user_id, project_id, agent_id, type, payload, created_at
+               FROM events WHERE type = 'error'
+               ORDER BY created_at DESC LIMIT ?""",
+            (limit,),
+        ).fetchall()
+    import json as _json
+    return [
+        {
+            "id": r["id"], "user_id": r["user_id"], "type": r["type"],
+            "payload": _json.loads(r["payload"]) if r["payload"] else {},
+            "created_at": r["created_at"],
+        }
+        for r in rows
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 — Stripe customer management
+# ---------------------------------------------------------------------------
+
+def set_stripe_customer_id(user_id: str, customer_id: str) -> None:
+    with _conn() as conn:
+        conn.execute(
+            "UPDATE users SET stripe_customer_id = ?, updated_at = ? WHERE id = ?",
+            (customer_id, _now(), user_id),
+        )
+
+
+def get_user_by_stripe_customer_id(customer_id: str) -> User | None:
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM users WHERE stripe_customer_id = ?", (customer_id,)
+        ).fetchone()
+    return _row_to_user(row) if row else None
+
+
+def update_user_tier(user_id: str, tier: str) -> None:
+    from rawos.config import settings
+    tier_budgets = {
+        "free":       settings.free_tier_daily_tokens,
+        "pro":        settings.pro_tier_daily_tokens,
+        "enterprise": settings.enterprise_tier_daily_tokens,
+    }
+    budget = tier_budgets.get(tier, settings.free_tier_daily_tokens)
+    with _conn() as conn:
+        conn.execute(
+            "UPDATE users SET tier = ?, token_budget_daily = ?, updated_at = ? WHERE id = ?",
+            (tier, budget, _now(), user_id),
+        )
+
+
+def get_workdir_by_project_id(project_id: str) -> str | None:
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT workdir FROM projects WHERE id = ? LIMIT 1",
+            (project_id,),
+        ).fetchone()
+    return row["workdir"] if row else None

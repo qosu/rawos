@@ -1,0 +1,27 @@
+{
+  "version": "1.0.0",
+  "description": "Test configuration for scraper project tests",
+  "test_selection": {
+    "fast": {
+      "include": ["TestDataExporter", "TestRateLimit"],
+      "description": "Unit tests with no external dependencies (runs in <1s)"
+    },
+    "structure": {
+      "include": ["TestScraperModuleStructure"],
+      "description": "AST-based structure verification tests"
+    },
+    "full": {
+      "include": ["TestDataExporter", "TestRateLimit", "TestScraperModuleStructure"],
+      "description": "Complete test suite"
+    }
+  },
+  "markdown_export": {
+    "enabled": true,
+    "output_dir": "test_reports",
+    "filename_template": "test_report_{suite}_{timestamp}.md"
+  },
+  "coverage_threshold": {
+    "statement": 80,
+    "branch": 70
+  }
+}
