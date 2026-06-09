@@ -933,9 +933,8 @@ async def _run_proactive_agent(
     _entity_probe: dict | None = None
     if (
         user_id == RAWOS_ENTITY_USER_ID
-        and trigger_type in (None, "STUCK")
+        and trigger_type not in ("SERVER_SCAN", "NEEDS_ATTENTION")
         and not (trigger_ctx or {}).get("diff_hunk")
-        and not (trigger_ctx or {}).get("file")
     ):
         _entity_probe = await _select_entity_probe_target(user_id)
         if _entity_probe is None:
@@ -1015,10 +1014,17 @@ async def _run_proactive_agent(
             _ep_status = "FAILURES FOUND" if _entity_probe["has_failures"] else "all tests passed"
             _ep_tout = _entity_probe["test_output"]
             trigger_block += f"\nTest status: {_ep_status}\n{_ep_tout}\n"
-        trigger_block += (
-            "\nTask: identify ONE concrete fixable issue from the above. "
-            "Nothing specific to fix? Choose SILENCE.\n"
-        )
+        if _entity_probe["has_failures"]:
+            trigger_block += (
+                "\nMission: the test failures above are your ONLY task.\n"
+                "Fix the root cause. Do NOT write reports or diagnostic summaries.\n"
+                "If you cannot fix it, SILENCE. Do not SIGNAL without a concrete reason.\n"
+            )
+        else:
+            trigger_block += (
+                "\nTask: identify ONE concrete fixable issue from the above. "
+                "Nothing specific to fix? Choose SILENCE.\n"
+            )
     elif trigger_type == "STUCK":
         trigger_block = (
             f"\n[TRIGGER: STUCK]\n"
@@ -1062,17 +1068,25 @@ async def _run_proactive_agent(
         if tc.get("last_log"):
             trigger_block += f"\nRecent logs:\n{tc['last_log'][:600]}\n"
 
-    context_summary = (
-        "Tech stack: " + (", ".join(stack) if stack else "unknown") + "\n"
-        + "Active domains: " + (", ".join(domains) if domains else "none detected") + "\n"
-        + "Inferred intent: " + intent_obj.goal
-        + " (confidence=" + f"{intent_obj.confidence:.2f}"
-        + ", domain=" + intent_obj.domain + ")\n"
-        + "Suggested actions: " + "; ".join(intent_obj.suggested_actions or []) + "\n"
-        + trigger_block
-        + "Recent activity:\n"
-        + ("\n".join(recent_lines) if recent_lines else "  (no recent file activity)")
-    )
+    if _entity_probe and _entity_probe["has_failures"]:
+        _probe_target = _entity_probe["workdir"]
+        context_summary = (
+            f"Mission: fix test failures in {_probe_target}\n"
+            "This is not a debugging analysis task. You must fix the failing tests.\n"
+            + trigger_block
+        )
+    else:
+        context_summary = (
+            "Tech stack: " + (", ".join(stack) if stack else "unknown") + "\n"
+            + "Active domains: " + (", ".join(domains) if domains else "none detected") + "\n"
+            + "Inferred intent: " + intent_obj.goal
+            + " (confidence=" + f"{intent_obj.confidence:.2f}"
+            + ", domain=" + intent_obj.domain + ")\n"
+            + "Suggested actions: " + "; ".join(intent_obj.suggested_actions or []) + "\n"
+            + trigger_block
+            + "Recent activity:\n"
+            + ("\n".join(recent_lines) if recent_lines else "  (no recent file activity)")
+        )
 
     # Append deep code context for STUCK and JUST_FINISHED
     if trigger_type in ("STUCK", "JUST_FINISHED"):

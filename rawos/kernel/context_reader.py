@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -103,16 +104,16 @@ def _detect_and_run_tests(workdir: str) -> str:
     w = Path(workdir)
     # Ordered: most specific first
     markers: list[tuple[str, list[str]]] = [
-        ("pytest.ini",     ["python", "-m", "pytest", "--tb=short", "-q"]),
-        ("setup.cfg",      ["python", "-m", "pytest", "--tb=short", "-q"]),
-        ("pyproject.toml", ["python", "-m", "pytest", "--tb=short", "-q"]),
+        ("pytest.ini",     ["python3", "-m", "pytest", "-x", "--tb=line", "-q"]),
+        ("setup.cfg",      ["python3", "-m", "pytest", "-x", "--tb=line", "-q"]),
+        ("pyproject.toml", ["python3", "-m", "pytest", "-x", "--tb=line", "-q"]),
         ("Makefile",       ["make", "test"]),
     ]
     for marker, cmd in markers:
         if (w / marker).exists():
             try:
                 r = subprocess.run(
-                    cmd, cwd=workdir, capture_output=True, text=True, timeout=30.0,
+                    cmd, cwd=workdir, capture_output=True, text=True, timeout=90.0,
                 )
                 combined = (r.stdout + r.stderr)[:2000]
                 failure_lines = [
@@ -121,7 +122,7 @@ def _detect_and_run_tests(workdir: str) -> str:
                 ]
                 return "\n".join(failure_lines) if failure_lines else "all tests passed"
             except subprocess.TimeoutExpired:
-                return "tests timed out (30s)"
+                return "tests timed out (90s)"
             except Exception:
                 return ""
     return ""
