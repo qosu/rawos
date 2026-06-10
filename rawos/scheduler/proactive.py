@@ -20,6 +20,7 @@ from typing import Any
 import rawos.db as db
 from rawos.kernel import agent_loop
 from rawos.kernel.tools import TOOL_DEFINITIONS
+from rawos.kernel.worktree import create_worktree, remove_worktree
 from rawos.config import settings
 from rawos.inference.intent_engine import InferredIntent, infer_intent
 from rawos.evaluation.metrics import log_inference, link_inference_to_artifact
