@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environment
+venv/
+.venv/
+env/
+
+# Runtime data — never commit DB, chroma, or model artifacts
+data/
+
+# User workspaces — per-user project directories
+workspaces/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Test and coverage artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*~
