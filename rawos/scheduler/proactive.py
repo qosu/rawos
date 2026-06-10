@@ -636,7 +636,7 @@ async def _generate_code_fix(
     try:
         async with _httpx.AsyncClient(timeout=60.0) as client:
             resp = await client.post(
-                "https://api.deepseek.com/chat/completions",
+                f"{settings.deepseek_base_url}/chat/completions",
                 headers={
                     "Authorization": "Bearer " + settings.deepseek_key,
                     "Content-Type": "application/json",

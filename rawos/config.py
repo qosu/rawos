@@ -28,8 +28,8 @@ class Settings(BaseSettings):
     # AI — DeepSeek only (one provider)
     deepseek_key:        str = ""
     deepseek_base_url:   str = "https://api.deepseek.com/v1"
-    deepseek_model_pro:  str = "deepseek-chat"
-    deepseek_model_fast: str = "deepseek-chat"  # same model, future: deepseek-v3-fast
+    deepseek_model_pro:  str = "deepseek-v4-pro"
+    deepseek_model_fast: str = "deepseek-v4-flash"
 
     # Internal compression (Groq — system-only, never user-facing)
     groq_keys: list[str] = []

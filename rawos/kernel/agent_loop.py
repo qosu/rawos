@@ -32,6 +32,11 @@ log = logging.getLogger("rawos.agent_loop")
 
 MAX_TOOL_ROUNDS = 12
 
+# Compress working_messages when they exceed this count within a single run.
+# Keeps the last AGENT_COMPRESS_KEEP_TURNS complete turns verbatim.
+AGENT_COMPRESS_THRESHOLD = 18
+AGENT_COMPRESS_KEEP_TURNS = 4
+
 _SYSTEM_PROMPT = """You are rawos — an AI operating system with real execution capabilities.
 
 You have tools to create files, run commands, and build real software in the user's workspace.
@@ -46,6 +51,160 @@ RULES:
 
 The workspace is isolated to the user's project directory.
 Be concise in your final response — the work speaks for itself."""
+
+
+def _safe_tail_start(messages: list[dict], keep_turns: int) -> int:
+    """Return the index where the last `keep_turns` complete turns begin.
+
+    Walks backward to find the boundary of a complete (assistant + tools) turn,
+    ensuring the tail always starts at an assistant message — never mid-turn.
+    Returns len(messages) if fewer than `keep_turns` turns exist.
+    """
+    idx = len(messages)
+    turns = 0
+    while turns < keep_turns and idx > 1:
+        # Walk back over tool messages (belong to preceding assistant)
+        while idx > 1 and messages[idx - 1].get("role") == "tool":
+            idx -= 1
+        if idx > 1 and messages[idx - 1].get("role") == "assistant":
+            idx -= 1
+            turns += 1
+        else:
+            break
+    return idx
+
+
+def _safe_compress_cut(messages: list[dict]) -> int:
+    """Return the highest safe-cut index (exclusive) in the compressible slice.
+
+    A safe cut is right after all tool results for a complete assistant turn —
+    i.e., the message at the cut index is assistant or user, never tool.
+    Returns 0 if no safe cut is found.
+    """
+    last_safe = 0
+    i = 0
+    while i < len(messages):
+        role = messages[i].get("role")
+        if role == "assistant":
+            j = i + 1
+            while j < len(messages) and messages[j].get("role") == "tool":
+                j += 1
+            last_safe = j
+            i = j
+        else:
+            i += 1
+    return last_safe
+
+
+async def _compress_working_messages(working_messages: list[dict]) -> list[dict]:
+    """Compress working_messages mid-run using DeepSeek V4-Flash.
+
+    Strategy:
+    - Pin messages[0] (original task anchor — never compressed).
+    - Find the boundary of the last AGENT_COMPRESS_KEEP_TURNS complete turns.
+    - Compress everything between the anchor and that boundary into a dense
+      summary via DeepSeek V4-Flash (cached reads: ~$0.0028/1M).
+    - Return: [synthetic_summary_user_msg] + [tail verbatim].
+
+    Falls back to original messages on any error — never disrupts the agent run.
+    """
+    if len(working_messages) <= 2:
+        return working_messages
+
+    tail_start = _safe_tail_start(working_messages, AGENT_COMPRESS_KEEP_TURNS)
+    if tail_start <= 1:
+        return working_messages
+
+    origin = working_messages[0]
+    compressible = working_messages[1:tail_start]
+    tail = working_messages[tail_start:]
+
+    cut = _safe_compress_cut(compressible)
+    if cut == 0:
+        return working_messages
+
+    to_compress = compressible[:cut]
+    keep_mid = compressible[cut:]
+
+    lines: list[str] = []
+    for msg in to_compress:
+        role = msg.get("role", "?").upper()
+        content = msg.get("content") or ""
+        tool_calls = msg.get("tool_calls") or []
+        if tool_calls:
+            names = [tc.get("function", {}).get("name", "?") for tc in tool_calls]
+            lines.append(f"{role}: called {names}")
+        elif content:
+            lines.append(f"{role}: {str(content)[:300]}")
+
+    history_text = "\n".join(lines)
+
+    try:
+        payload = {
+            "model": settings.deepseek_model_fast,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "Compress this AI agent conversation history into a dense technical summary. "
+                        "Preserve exactly: every file path read/edited/created, every function changed, "
+                        "every bug found and its fix, every decision and WHY, current state of the task. "
+                        "Omit: verbose tool output, repeated results, failed attempts that were fixed. "
+                        "Output ONLY the summary — no preamble, no headers."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": f"Compress:\n\n{history_text[:15000]}",
+                },
+            ],
+            "max_tokens": 800,
+            "temperature": 0.1,
+            "stream": False,
+        }
+        async with httpx.AsyncClient(timeout=25.0) as client:
+            resp = await client.post(
+                f"{settings.deepseek_base_url}/chat/completions",
+                json=payload,
+                headers={
+                    "Authorization": f"Bearer {settings.deepseek_key}",
+                    "Content-Type": "application/json",
+                },
+            )
+        if resp.status_code != 200:
+            return working_messages
+        summary = resp.json()["choices"][0]["message"]["content"].strip()
+    except Exception:
+        log.debug("context compression failed (non-fatal)", exc_info=True)
+        return working_messages
+
+    if not summary:
+        return working_messages
+
+    origin_content = origin.get("content", "")
+    origin_prefix = f"[Original task: {str(origin_content)[:400]}]\n\n" if origin_content else ""
+    summary_msg = {
+        "role": "user",
+        "content": (
+            origin_prefix
+            + f"[Compressed context: {len(to_compress)} earlier messages]\n"
+            + summary
+        ),
+    }
+
+    result = [summary_msg] + keep_mid + tail
+    # Guarantee result starts with a user message (valid OpenAI alternation)
+    while result and result[0].get("role") != "user":
+        result = result[1:]
+
+    compressed_len = len(result)
+    original_len = len(working_messages)
+    log.info(
+        "context compressed: %d → %d messages (%d tokens saved approx)",
+        original_len, compressed_len,
+        (original_len - compressed_len) * 300,
+    )
+    return result if result else working_messages
 
 
 async def _llm_tool_call(
@@ -81,6 +240,10 @@ async def _llm_tool_call(
             body = resp.text[:300]
             raise RuntimeError(f"DeepSeek {resp.status_code}: {body}")
         data = resp.json()
+
+    usage = data.get("usage", {})
+    _log_usage(model, usage)
+
     return data["choices"][0]["message"]
 
 
@@ -128,6 +291,19 @@ async def _llm_stream_final(
                     continue
 
 
+def _log_usage(model: str, usage: dict) -> None:
+    """Log DeepSeek token usage including cache hit/miss breakdown."""
+    total_in = usage.get("prompt_tokens", 0)
+    cache_hit = usage.get("prompt_cache_hit_tokens", 0)
+    cache_miss = usage.get("prompt_cache_miss_tokens", 0)
+    out = usage.get("completion_tokens", 0)
+    hit_rate = (cache_hit / total_in * 100) if total_in else 0.0
+    log.info(
+        "tokens model=%s in=%d cache_hit=%d cache_miss=%d out=%d hit_rate=%.0f%%",
+        model, total_in, cache_hit, cache_miss, out, hit_rate,
+    )
+
+
 def _detect_artifacts(workdir: str, known_files: set[str]) -> list[dict]:
     """
     Scan workdir for new files not in known_files.
@@ -171,13 +347,17 @@ async def run(
     messages: history WITHOUT system prompt (caller provides).
     on_artifact: async callable invoked for each new file, returns Artifact with id.
     """
-    # Snapshot existing files so we detect new ones after tool calls
     existing: set[str] = set()
-    _detect_artifacts(workdir, existing)   # pre-populate, discard result
+    _detect_artifacts(workdir, existing)
 
     working_messages = list(messages)
 
     for round_num in range(MAX_TOOL_ROUNDS):
+        # Compress context if working_messages has grown too large.
+        # Uses DeepSeek V4-Flash (cache hit ~$0.0028/1M) — negligible cost vs savings.
+        if len(working_messages) > AGENT_COMPRESS_THRESHOLD:
+            working_messages = await _compress_working_messages(working_messages)
+
         try:
             msg = await _llm_tool_call(working_messages, model, system_prompt, tool_definitions)
         except Exception as e:
@@ -189,17 +369,11 @@ async def run(
         text_content = (msg.get("content") or "").strip()
 
         if not tool_calls:
-            # No tool calls: this IS the final answer.
-            # If content is non-empty, stream it chunk by chunk (already have it).
             if text_content:
-                # Emit as a single chunk (already received, no streaming benefit here
-                # unless we make another streaming call — but that wastes tokens).
-                # Emit char-by-char to maintain streaming UX.
                 chunk_size = 4
                 for i in range(0, len(text_content), chunk_size):
                     yield {"type": "chunk", "text": text_content[i:i+chunk_size]}
             else:
-                # Empty content after tools: make one final streaming call
                 try:
                     async for chunk in _llm_stream_final(working_messages, model, system_prompt):
                         yield {"type": "chunk", "text": chunk}
@@ -207,8 +381,6 @@ async def run(
                     yield {"type": "error", "message": str(e)}
             break
 
-        # Execute tool calls
-        # Append assistant message with tool_calls to history
         working_messages.append({
             "role": "assistant",
             "content": text_content or None,
@@ -237,14 +409,12 @@ async def run(
                 "duration_ms": result.duration_ms,
             }
 
-            # Append tool result to history
             working_messages.append({
                 "role":         "tool",
                 "tool_call_id": call_id,
                 "content":      result.output,
             })
 
-            # Detect and emit new files created by this tool call
             new_files = _detect_artifacts(workdir, existing)
             for af in new_files:
                 artifact_id = ""
@@ -264,7 +434,6 @@ async def run(
                 }
 
     else:
-        # Max rounds reached — do a final streaming summarisation
         log.warning("agent loop hit MAX_TOOL_ROUNDS=%d for intent %s", MAX_TOOL_ROUNDS, intent_id)
         try:
             async for chunk in _llm_stream_final(working_messages, model, system_prompt):

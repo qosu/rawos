@@ -157,7 +157,7 @@ class Agent(BaseModel):
     parent_id:   str | None  = None   # set when spawned by another agent
     status:      AgentStatus = AgentStatus.DORMANT
     goal:        str
-    model:       str         = "deepseek-chat"
+    model:       str         = "deepseek-v4-flash"
     token_used:  int         = 0
     created_at:  int         = Field(default_factory=_now)
     updated_at:  int         = Field(default_factory=_now)

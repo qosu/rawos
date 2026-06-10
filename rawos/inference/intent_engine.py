@@ -205,13 +205,13 @@ async def _llm_infer(model: dict[str, Any]) -> InferredIntent:
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.post(
-                "https://api.deepseek.com/chat/completions",
+                f"{settings.deepseek_base_url}/chat/completions",
                 headers={
                     "Authorization": f"Bearer {settings.deepseek_key}",
                     "Content-Type": "application/json",
                 },
                 json={
-                    "model": "deepseek-chat",
+                    "model": settings.deepseek_model_fast,
                     "messages": [
                         {"role": "system", "content": _LLM_SYSTEM},
                         {"role": "user", "content": user_context},

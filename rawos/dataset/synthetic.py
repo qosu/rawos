@@ -79,13 +79,13 @@ Output ONLY a valid JSON array with no markdown, no code fences, no explanation:
 async def _call_deepseek(prompt: str, temperature: float = 0.8) -> str:
     async with aiohttp.ClientSession() as session:
         async with session.post(
-            "https://api.deepseek.com/chat/completions",
+            f"{settings.deepseek_base_url}/chat/completions",
             headers={
                 "Authorization": f"Bearer {settings.deepseek_key}",
                 "Content-Type": "application/json",
             },
             json={
-                "model": "deepseek-chat",
+                "model": settings.deepseek_model_fast,
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": temperature,
                 "max_tokens": 4096,
