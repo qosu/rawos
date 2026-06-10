@@ -7,18 +7,36 @@ name = "rawos"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
+    # Web framework
     "fastapi>=0.115",
     "uvicorn[standard]>=0.32",
     "pydantic>=2.10",
     "pydantic-settings>=2.7",
+    "python-multipart>=0.0.12",
+    "sse-starlette>=2.1",
+    # Auth
     "python-jose[cryptography]>=3.3",
     "bcrypt>=4.2",
-    "python-multipart>=0.0.12",
+    # HTTP clients
     "httpx>=0.28",
-    "sse-starlette>=2.1",
+    "aiohttp>=3.9",
+    # Async / file IO
     "aiofiles>=24.1",
+    "watchdog>=4.0",
+    # Observability
+    "prometheus-client>=0.21",
+    # AI / ML
     "sentence-transformers>=3.3",
     "chromadb>=0.6",
+    "numpy>=1.26",
+    "scikit-learn>=1.5",
+    # CLI
+    "click>=8.1",
+    "rich>=13.0",
+    # Billing (lazy-imported; required at deploy time)
+    "stripe>=10.0",
+    # Rate-limit backing store (lazy-imported; required at deploy time)
+    "redis>=5.0",
 ]
 
 [project.optional-dependencies]
