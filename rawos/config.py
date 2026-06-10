@@ -72,6 +72,9 @@ class Settings(BaseSettings):
     # Sandbox
     sandbox_docker: bool = True   # False in tests/dev; True = Docker container isolation
 
+    # Phase 16 — self-modification
+    self_probe_enabled: bool = False   # dormant until a human enables it after a manual worktree cycle
+
     # Phase 4 — multi-agent orchestration
     max_sub_agent_tokens:    int = 15_000
     max_orchestrator_tokens: int = 10_000

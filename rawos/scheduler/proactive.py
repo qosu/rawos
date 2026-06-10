@@ -111,6 +111,9 @@ AUTONOMOUS_SCAN_INTERVAL_S  = 600   # 10 minutes between full server scans
 AUTONOMOUS_SCAN_THRESHOLD   = 6     # minimum severity to act (1-10 scale)
 AUTONOMOUS_SCAN_COOLDOWN_S  = 1800  # 30 min cooldown per anomaly type
 
+# Phase 16 self-modification probe — dormant until settings.self_probe_enabled
+SELF_PROBE_INTERVAL_S = 21600  # 6 hours
+
 # rawos entity user — used for autonomous actions not tied to human activity
 RAWOS_ENTITY_USER_ID    = "6eb6de1d-f5c9-4ae5-9aac-ce095b674823"
 RAWOS_ENTITY_PROJECT_ID = "51c880d3-3576-4aca-8616-74cb51a6f727"
@@ -1442,3 +1445,46 @@ async def _scan_once(semaphore: asyncio.Semaphore) -> None:
 
     if tasks:
         await asyncio.gather(*tasks, return_exceptions=True)
+
+
+async def rawos_self_probe_loop() -> None:
+    """
+    Phase 16 self-modification entry point.
+
+    DORMANT by default (settings.self_probe_enabled = False) — see PLAN.md
+    "Phase 16 — Pass 2 — implementation design", step d. While disabled,
+    this logs once and returns immediately: no loop, no sleep, no side
+    effects. A human must flip settings.self_probe_enabled to True after
+    observing one manual self-probe worktree cycle.
+
+    When enabled, this is meant to run every SELF_PROBE_INTERVAL_S, always
+    against an isolated `git worktree` of /root/rawos (never the live
+    working tree — see _targets_rawos_own_repo / TIER enforcement in
+    rawos/kernel/tools.py), producing rawos/self-improve-* branches for
+    human review. NO auto-merge, NO auto-restart.
+    """
+    if not settings.self_probe_enabled:
+        log.info("rawos self-probe loop disabled (settings.self_probe_enabled=False) — not starting")
+        return
+
+    log.info("rawos self-probe loop started (interval=%ds)", SELF_PROBE_INTERVAL_S)
+    while True:
+        try:
+            await _run_self_probe_cycle()
+        except asyncio.CancelledError:
+            log.info("rawos self-probe loop cancelled")
+            break
+        except Exception:
+            log.exception("self-probe cycle error (continuing)")
+        await asyncio.sleep(SELF_PROBE_INTERVAL_S)
+
+
+async def _run_self_probe_cycle() -> None:
+    """Not yet implemented — the self-probe loop ships dormant (Pass 2 step d).
+
+    When settings.self_probe_enabled is enabled, this must operate on an
+    isolated `git worktree add /root/rawos-self-probe-worktree <branch>`
+    (workdir = the worktree path, never /root/rawos), and leave its results
+    on a rawos/self-improve-* branch for human review.
+    """
+    raise NotImplementedError("self-probe worktree cycle not yet implemented (Pass 2 step d)")
