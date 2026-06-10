@@ -16,6 +16,8 @@ import asyncio
 import json
 import logging
 import time
+
+from rawos.kernel.agent_loop import _log_usage
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -216,12 +218,14 @@ async def _llm_infer(model: dict[str, Any]) -> InferredIntent:
                         {"role": "system", "content": _LLM_SYSTEM},
                         {"role": "user", "content": user_context},
                     ],
-                    "max_tokens": 200,
+                    "max_tokens": 500,
                     "temperature": 0.1,
                 },
             )
         resp.raise_for_status()
-        content = resp.json()["choices"][0]["message"]["content"].strip()
+        data = resp.json()
+        _log_usage(settings.deepseek_model_fast, data.get("usage", {}))
+        content = data["choices"][0]["message"]["content"].strip()
         # Strip code fences if model adds them despite instructions
         if content.startswith("```"):
             content = content.split("\n", 1)[1].rsplit("```", 1)[0].strip()

@@ -76,8 +76,14 @@ _SESSION_IDLE_CLOSE_S = 900  # 15 minutes idle -> close session
 
 
 def _detect_repo_root(file_path: str) -> str | None:
-    """Walk up directory tree to find nearest .git directory."""
-    p = Path(file_path).resolve().parent
+    """Walk up directory tree to find nearest .git directory.
+
+    If file_path is itself a directory, check it before walking up —
+    otherwise a repo root passed directly (e.g. server-scan affected_path)
+    is skipped in favor of its parent.
+    """
+    resolved = Path(file_path).resolve()
+    p = resolved if resolved.is_dir() else resolved.parent
     for _ in range(12):
         if (p / ".git").is_dir():
             return str(p)

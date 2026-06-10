@@ -110,6 +110,17 @@ _BASH_READONLY_GIT_SUBCMDS: frozenset[str] = frozenset({
     "log", "diff", "show", "status", "branch", "tag", "stash",
     "ls-files", "ls-tree", "rev-parse", "describe", "shortlog", "blame",
 })
+# Read-only systemctl subcommands — diagnosis only, never start/stop/restart/
+# enable/disable/reload/mask/daemon-reload etc.
+_BASH_READONLY_SYSTEMCTL_SUBCMDS: frozenset[str] = frozenset({
+    "status", "show", "cat", "is-active", "is-failed", "is-enabled",
+    "list-units", "list-unit-files", "list-timers",
+})
+# journalctl flags that mutate or destroy log data, or block forever — rejected
+# even though journalctl itself is otherwise read-only.
+_BASH_READONLY_JOURNALCTL_BLOCKED: tuple[str, ...] = (
+    "-f", "--follow", "--flush", "--rotate", "--sync", "--relinquish-var",
+)
 
 # Shell metacharacters that enable command chaining or subshell injection.
 # Checked against the raw command string before any parsing.
@@ -177,6 +188,15 @@ def _is_bash_readonly_safe(command: str) -> bool:
         if base in _BASH_READONLY_CMDS:
             continue
         if base == "git" and len(seg) >= 2 and seg[1] in _BASH_READONLY_GIT_SUBCMDS:
+            continue
+        if base == "systemctl" and len(seg) >= 2 and seg[1] in _BASH_READONLY_SYSTEMCTL_SUBCMDS:
+            continue
+        if base == "journalctl":
+            if any(
+                tok in _BASH_READONLY_JOURNALCTL_BLOCKED or tok.startswith("--vacuum")
+                for tok in seg[1:]
+            ):
+                return False
             continue
         return False
 

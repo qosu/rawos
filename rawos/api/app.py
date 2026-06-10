@@ -31,6 +31,10 @@ from rawos.api.trust_routes       import router as trust_router
 from rawos.api.calendar_routes    import router as calendar_router
 from rawos.api.push_routes        import router as push_router
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(levelname)s:%(name)s:%(message)s",
+)
 _log = logging.getLogger("rawos.startup")
 
 

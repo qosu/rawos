@@ -54,16 +54,24 @@ async def manifest_agent_result(
     goal: str,
     domain: str,
     content: str,
+    target_dir: str | None = None,
 ) -> tuple[str, str | None]:
     """
-    Write result to {workdir}/RAWOS_{domain}_{slug}_{ts}.md.
+    Write result to {target_dir or workdir}/RAWOS_{domain}_{slug}_{ts}.md.
+
+    target_dir lets callers redirect the artifact away from workdir — e.g.
+    autonomous server-scan runs must never drop files into a scanned
+    repo's working tree (it pollutes that repo and can break its own
+    git-cleanliness checks). Defaults to workdir for normal proactive runs.
     Returns (absolute_file_path, artifact_id).
     """
     slug = _goal_slug(goal)
     ts = int(time.time())
     domain_safe = re.sub(r"[^a-z0-9_-]", "-", domain.lower()).strip("-")
     filename = f"RAWOS_{domain_safe}_{slug}_{ts}.md"
-    file_path = Path(workdir) / filename
+    out_dir = Path(target_dir) if target_dir else Path(workdir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    file_path = out_dir / filename
 
     header = (
         f"<!-- rawos proactive analysis -->\n"

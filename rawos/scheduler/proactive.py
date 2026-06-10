@@ -536,46 +536,55 @@ async def _post_commit_self_rate(episodic_id: str, workdir: str) -> None:
 
 
 _AUTONOMOUS_SYSTEM_PROMPT = (
-    "You are rawos. You have root access and full authority over this server.\n"
-    "You are NOT reacting to human activity.\n"
-    "You scanned the server independently and found an anomaly. Act on it.\n\n"
-    "You have real tools with root access — no sandbox:\n"
-    "- bash: run any non-destructive command on the server\n"
-    "- read_file / list_files: read any file on the filesystem\n"
-    "- write_file: modify files within the affected repository\n"
-    "- git_branch / git_commit: create rawos/* branches in ANY repo on this server\n\n"
-    "CONTRIBUTE — Root cause is identifiable and fix is a code/config change.\n"
-    "  Execute in order:\n"
-    "  1. Read actual logs and source. Find exact root cause (file:line or config key).\n"
-    "  2. git_branch: create rawos/fix-[description] in the affected repo (workdir).\n"
-    "  3. Write the minimum correct fix.\n"
-    "  4. Verify:\n"
-    "     - Code fix: run existing tests (pytest / make test / npm test).\n"
-    "     - Service fix: systemctl restart [service] && sleep 5 && systemctl is-active [service]\n"
-    "     - Config fix: validate syntax, restart, health check.\n"
-    "  5a. If verification passes:\n"
-    "      git_commit with format:\n"
-    "        rawos: fix [what]\n\n"
-    "        Root cause: [file:line or unit — specific]\n"
-    "        Fix: [what changed]\n"
-    "        Verified: [N/N tests passed | service active | health check ok]\n"
-    "        Confidence: 0.X\n"
-    "      Begin response with: CONTRIBUTE\n"
-    "      End response with: VERIFIED: [evidence]\n"
-    "  5b. If verification fails:\n"
-    "      Run: git checkout -- .\n"
-    "      Begin response with: SIGNAL\n"
-    "      End response with: REVERTED: [what failed and why]\n\n"
-    "SIGNAL — ONLY when fix requires information rawos cannot access:\n"
-    "  (credentials, secrets, external API state, business logic decisions).\n"
-    "  Service failures, code bugs, config errors: these are CONTRIBUTE, not SIGNAL.\n"
-    "  State: what is broken, what information is missing, what rawos already tried.\n\n"
-    "SILENCE — False alarm, already resolved, or outside rawos capability.\n\n"
+    "You are rawos, running an autonomous server-health investigation.\n"
+    "You are NOT reacting to human activity — you scanned the server\n"
+    "independently and found an anomaly. Diagnose it and propose a fix.\n\n"
+    "YOUR ENVIRONMENT (read carefully — this is the real, exact sandbox):\n"
+    "- Your workdir is a DISPOSABLE, ISOLATED git worktree of the affected\n"
+    "  repo — a full checkout on its own detached HEAD. It is NOT the live\n"
+    "  working tree other services use, so anything you do here cannot\n"
+    "  collide with that repo's own automation. It is deleted after this run;\n"
+    "  only commits on a rawos/* branch survive (in the origin repo, for a\n"
+    "  human to review and merge — you cannot merge or push).\n"
+    "- read_file / list_files / write_file: confined to this worktree. Paths\n"
+    "  outside it are rejected — do not try.\n"
+    "- bash_readonly: runs ONE command at a time, already in this worktree's\n"
+    "  directory (never use cd, &&, ;, or pipes-to-shells). Whitelisted:\n"
+    "  cat, grep, find, ls, head, tail, diff, wc;\n"
+    "  git log/diff/show/status/branch/tag/ls-files/rev-parse/blame;\n"
+    "  systemctl status/show/cat/is-active/is-failed/is-enabled/list-units;\n"
+    "  journalctl -u <service> (no -f/--follow, no --vacuum*).\n"
+    "  Anything else (systemctl restart/stop/start, git push/checkout of the\n"
+    "  live tree, cd, command chaining) is rejected — do not attempt it.\n"
+    "- git_branch / git_commit: create exactly one rawos/fix-[description]\n"
+    "  branch in THIS worktree and commit your fix to it. This is a real,\n"
+    "  isolated commit in the repo's history — it will not be merged or\n"
+    "  deployed automatically.\n\n"
+    "CONTRIBUTE — root cause is identifiable and fixable as a code/config change.\n"
+    "  1. Read the provided logs + relevant source (read_file/list_files/\n"
+    "     bash_readonly) to find the exact root cause (file:line or unit).\n"
+    "  2. git_branch: create rawos/fix-[description].\n"
+    "  3. write_file: make the minimum correct fix.\n"
+    "  4. git_commit with format:\n"
+    "       rawos: fix [what]\n\n"
+    "       Root cause: [file:line or unit — specific]\n"
+    "       Fix: [what changed]\n"
+    "       Confidence: 0.X\n"
+    "  Begin response with: CONTRIBUTE\n"
+    "  End response with: PROPOSED: rawos/fix-[description] — [one-line summary\n"
+    "  for the human reviewer, including any commands they must run manually,\n"
+    "  e.g. systemctl restart <service>]\n\n"
+    "SIGNAL — fix requires information or actions you cannot access from here\n"
+    "  (credentials, secrets, external API state, restarting/enabling a\n"
+    "  service, business-logic decisions). State: what is broken, what is\n"
+    "  missing, what you found.\n\n"
+    "SILENCE — false alarm, already resolved, or outside rawos's ability to\n"
+    "  diagnose from logs + source alone.\n\n"
     "Rules:\n"
     "  - You initiated this scan. No human asked you to look.\n"
     "  - Read actual logs and code before deciding — never guess.\n"
-    "  - Never commit to main/master — always rawos/* branch.\n"
-    "  - You are accountable for the outcome. No human approves this.\n"
+    "  - You propose; a human applies. Never claim something is fixed/deployed\n"
+    "    — only that a fix has been proposed on a branch.\n"
     "  - Begin your response with exactly one of: CONTRIBUTE, SIGNAL, or SILENCE\n"
 )
 
@@ -706,6 +715,23 @@ def _resolve_proactive_workdir(
     return workdir or "/tmp"
 
 
+def _manifest_target(workdir: str, trigger_type: str | None) -> str | None:
+    """Return the directory proactive artifacts should be written to.
+
+    SERVER_SCAN runs operate on a repo rawos does not own (workdir is the
+    *scanned* repo's path). Writing RAWOS_*.md into that tree pollutes a
+    repo rawos has no business modifying and can break the target's own
+    git-cleanliness checks (e.g. research-foundry's
+    require_clean_or_agent_branch). Redirect those artifacts under rawos's
+    own gitignored data/ dir, namespaced by repo. All other trigger types
+    keep writing into the user's own project workdir (that is the product).
+    """
+    if trigger_type != "SERVER_SCAN":
+        return None
+    repo_name = Path(workdir).name or "unknown"
+    return str(Path(__file__).resolve().parents[2] / "data" / "manifests" / repo_name)
+
+
 def _get_tools_for_autonomy_level(level: int) -> list[dict]:
     """Return TOOL_DEFINITIONS subset gated by autonomy level.
 
@@ -724,6 +750,30 @@ def _get_tools_for_autonomy_level(level: int) -> list[dict]:
     }
     allowed = _LEVEL_TOOLS.get(min(level, 4), _LEVEL_TOOLS[4])
     return [t for t in TOOL_DEFINITIONS if t["function"]["name"] in allowed]
+
+
+# SERVER_SCAN runs in a disposable worktree (kernel/worktree.py) of a repo
+# rawos does not own. write_file/git_branch/git_commit are scoped by
+# validate_path(workdir=worktree) and so cannot escape that worktree — but
+# "bash" (full shell, level 2+) and "deploy"/"fetch_url" are deliberately
+# excluded even though the worktree is disposable, since they could affect
+# the host or external services beyond the worktree's filesystem confines.
+_SERVER_SCAN_TOOLS: frozenset[str] = frozenset({
+    "bash_readonly", "read_file", "list_files", "write_file",
+    "git_branch", "git_commit",
+})
+
+
+def _get_tools_for_server_scan() -> list[dict]:
+    """Toolset for SERVER_SCAN runs inside an isolated worktree.
+
+    Wider than autonomy level 0/1 (adds git_branch/git_commit so the agent
+    can propose a fix branch) but narrower than level 2 (no full "bash",
+    no fetch_url/deploy) regardless of the entity's configured autonomy
+    level — SERVER_SCAN's elevated tools are earned by isolation, not by
+    the entity's own autonomy grant.
+    """
+    return [t for t in TOOL_DEFINITIONS if t["function"]["name"] in _SERVER_SCAN_TOOLS]
 
 
 def _log_proactive_tool_calls(
@@ -816,10 +866,32 @@ async def _run_proactive_loop(
     """Run proactive reasoning through kernel agent_loop with real tools.
 
     Returns final assembled text, or None on failure (DB already updated on None).
+
+    SERVER_SCAN runs against a repo rawos does not own. Those run inside a
+    disposable worktree (kernel/worktree.py) of that repo — never its live
+    tree, which other automation (e.g. research-foundry.timer) depends on —
+    and get a wider toolset (write_file/git_branch/git_commit) scoped to that
+    worktree by validate_path. The worktree is removed at the end either way;
+    any rawos/* branch + commits the agent made remain in the origin repo for
+    a human to review and merge (no auto-merge).
     """
     autonomy_level = _get_user_autonomy_level(user_id, "analysis")
-    tool_defs = _get_tools_for_autonomy_level(autonomy_level)
     workdir = _resolve_proactive_workdir(trigger_ctx, user_id)
+
+    scan_worktree: str | None = None
+    if trigger_type == "SERVER_SCAN":
+        scan_worktree = await create_worktree(workdir)
+        if scan_worktree:
+            workdir = scan_worktree
+            tool_defs = _get_tools_for_server_scan()
+        else:
+            log.warning(
+                "SERVER_SCAN: could not create worktree for %s — "
+                "falling back to read-only diagnostics in place", workdir,
+            )
+            tool_defs = _get_tools_for_autonomy_level(0)
+    else:
+        tool_defs = _get_tools_for_autonomy_level(autonomy_level)
 
     system_prompt = (
         _NEEDS_ATTENTION_SYSTEM_PROMPT
@@ -853,33 +925,36 @@ async def _run_proactive_loop(
                 error_seen.append(event.get("message", "unknown error"))
 
     try:
-        await asyncio.wait_for(_collect(), timeout=MAX_PROACTIVE_LOOP_TIME_S)
-    except asyncio.TimeoutError:
-        log.warning("proactive agent_loop timeout (300s) for user=%s", user_id)
-        db.update_intent(user_id, intent_rec.id, status=IntentStatus.FAILED)
+        try:
+            await asyncio.wait_for(_collect(), timeout=MAX_PROACTIVE_LOOP_TIME_S)
+        except asyncio.TimeoutError:
+            log.warning("proactive agent_loop timeout (300s) for user=%s", user_id)
+            db.update_intent(user_id, intent_rec.id, status=IntentStatus.FAILED)
+            db.update_agent_status(user_id, agent_rec.id, AgentStatus.ARCHIVED)
+            return None
+        except Exception:
+            log.exception("proactive agent_loop failed for user=%s", user_id)
+            db.update_intent(user_id, intent_rec.id, status=IntentStatus.FAILED)
+            db.update_agent_status(user_id, agent_rec.id, AgentStatus.ARCHIVED)
+            return None
+
+        if error_seen:
+            log.error("proactive agent_loop error: %s (user=%s)", error_seen[0], user_id)
+            db.update_intent(user_id, intent_rec.id, status=IntentStatus.FAILED)
+            db.update_agent_status(user_id, agent_rec.id, AgentStatus.ARCHIVED)
+            return None
+
+        db.update_intent(user_id, intent_rec.id, status=IntentStatus.COMPLETED)
         db.update_agent_status(user_id, agent_rec.id, AgentStatus.ARCHIVED)
-        return None
-    except Exception:
-        log.exception("proactive agent_loop failed for user=%s", user_id)
-        db.update_intent(user_id, intent_rec.id, status=IntentStatus.FAILED)
-        db.update_agent_status(user_id, agent_rec.id, AgentStatus.ARCHIVED)
-        return None
 
-    if error_seen:
-        log.error("proactive agent_loop error: %s (user=%s)", error_seen[0], user_id)
-        db.update_intent(user_id, intent_rec.id, status=IntentStatus.FAILED)
-        db.update_agent_status(user_id, agent_rec.id, AgentStatus.ARCHIVED)
-        return None
+        if tool_events:
+            _log_proactive_tool_calls(user_id, agent_rec.id, tool_events)
+            _record_git_commits(user_id, intent_rec.project_id, workdir, tool_events)
 
-    db.update_intent(user_id, intent_rec.id, status=IntentStatus.COMPLETED)
-    db.update_agent_status(user_id, agent_rec.id, AgentStatus.ARCHIVED)
-
-    if tool_events:
-        _log_proactive_tool_calls(user_id, agent_rec.id, tool_events)
-        _record_git_commits(user_id, intent_rec.project_id, workdir, tool_events)
-
-    return "".join(collected_chunks).strip()
-
+        return "".join(collected_chunks).strip()
+    finally:
+        if scan_worktree:
+            await remove_worktree(scan_worktree)
 
 async def _run_proactive_agent(
     user_id: str,
@@ -1181,6 +1256,7 @@ async def _run_proactive_agent(
         file_path, artifact_id_out = await manifest_agent_result(
             user_id=user_id, project_id=project_id, workdir=workdir,
             goal=intent_obj.goal, domain=intent_obj.domain, content=result_text,
+            target_dir=_manifest_target(workdir, trigger_type),
         )
         _manifest_action_type = "attention" if trigger_type == "NEEDS_ATTENTION" else "analysis"
         pa_id = _record_proactive_artifact(
