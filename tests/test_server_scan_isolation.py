@@ -20,6 +20,12 @@ def _git(*args: str, cwd: str) -> None:
     subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True)
 
 
+def _git_out(*args: str, cwd: str) -> str:
+    return subprocess.run(
+        ["git", *args], cwd=cwd, check=True, capture_output=True, text=True,
+    ).stdout.strip()
+
+
 def _init_repo(path: str) -> None:
     _git("init", "-q", cwd=path)
     _git("config", "user.email", "test@rawos.local", cwd=path)
@@ -132,6 +138,28 @@ class TestWorktreeLifecycle:
             check=True, capture_output=True, text=True,
         )
         assert result.stdout.strip() == ""
+
+    @pytest.mark.asyncio
+    async def test_get_head_sha_matches_repo_head(self, tmp_path):
+        from rawos.kernel.worktree import create_worktree, get_head_sha, remove_worktree
+
+        repo = tmp_path / "origin-repo-sha"
+        repo.mkdir()
+        _init_repo(str(repo))
+        expected_sha = _git_out("rev-parse", "HEAD", cwd=str(repo))
+
+        worktree_path = await create_worktree(str(repo))
+        assert worktree_path is not None
+        try:
+            assert await get_head_sha(worktree_path) == expected_sha
+        finally:
+            await remove_worktree(worktree_path)
+
+    @pytest.mark.asyncio
+    async def test_get_head_sha_nonexistent_path_returns_none(self, tmp_path):
+        from rawos.kernel.worktree import get_head_sha
+
+        assert await get_head_sha(str(tmp_path / "does-not-exist")) is None
 
     @pytest.mark.asyncio
     async def test_create_worktree_non_repo_returns_none(self, tmp_path):

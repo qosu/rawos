@@ -56,7 +56,7 @@ if TYPE_CHECKING:
 # Anomaly kinds whose affected_path is a git repo with a re-runnable test
 # suite. disk_critical / disk_warning have affected_path == "/" and no
 # associated code change — not verifiable here.
-_VERIFIABLE_KINDS: frozenset[str] = frozenset({"service_failed", "service_error"})
+VERIFIABLE_ANOMALY_KINDS: frozenset[str] = frozenset({"service_failed", "service_error"})
 
 # CI-style limits — generous, since this runs a known command rawos itself
 # selected (a test suite), not an agent-chosen one. Distinct from
@@ -176,13 +176,13 @@ async def verify_fix(
     fix_branch (post-fix) inside worktree_path, and compares outcomes. See
     module docstring for the trust model and stated limitations.
 
-    Raises ValueError if anomaly.kind is not in _VERIFIABLE_KINDS — callers
+    Raises ValueError if anomaly.kind is not in VERIFIABLE_ANOMALY_KINDS — callers
     must not invoke this for disk_critical/disk_warning etc.
     """
-    if anomaly.kind not in _VERIFIABLE_KINDS:
+    if anomaly.kind not in VERIFIABLE_ANOMALY_KINDS:
         raise ValueError(
             f"anomaly.kind={anomaly.kind!r} is not verifiable in a worktree "
-            f"(only {sorted(_VERIFIABLE_KINDS)} have a re-runnable test "
+            f"(only {sorted(VERIFIABLE_ANOMALY_KINDS)} have a re-runnable test "
             f"suite) — affected_path={anomaly.affected_path!r} has no "
             f"associated code change to diff"
         )

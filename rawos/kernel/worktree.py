@@ -21,7 +21,7 @@ import time
 import uuid
 from pathlib import Path
 
-from rawos.kernel.sandbox import run_bash
+from rawos.kernel.sandbox import SandboxError, run_bash
 
 log = logging.getLogger("rawos.kernel.worktree")
 
@@ -54,6 +54,23 @@ async def create_worktree(repo_path: str) -> str | None:
         return None
 
     return str(target)
+
+
+async def get_head_sha(worktree_path: str) -> str | None:
+    """Return the commit SHA at worktree_path's current HEAD, or None on error.
+
+    Called immediately after create_worktree() succeeds, while the worktree
+    is still at its initial detached HEAD (the commit the anomaly was
+    detected against) — before the agent makes any commits. Used as
+    anomaly_verifier.verify_fix()'s base_ref for the pre-fix test run.
+    """
+    try:
+        result = await run_bash("git rev-parse HEAD", worktree_path)
+    except SandboxError:
+        return None
+    if result.exit_code != 0:
+        return None
+    return result.stdout.strip()
 
 
 async def remove_worktree(worktree_path: str) -> None:

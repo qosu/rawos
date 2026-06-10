@@ -20,7 +20,9 @@ from typing import Any
 import rawos.db as db
 from rawos.kernel import agent_loop
 from rawos.kernel.tools import TOOL_DEFINITIONS
-from rawos.kernel.worktree import create_worktree, remove_worktree
+from rawos.kernel.worktree import create_worktree, get_head_sha, remove_worktree
+from rawos.kernel.anomaly_verifier import VERIFIABLE_ANOMALY_KINDS, verify_fix
+from rawos.context.server_scanner import ServerAnomaly
 from rawos.config import settings
 from rawos.inference.intent_engine import InferredIntent, infer_intent
 from rawos.evaluation.metrics import log_inference, link_inference_to_artifact
@@ -106,6 +108,10 @@ SCAN_INTERVAL_S          = 120.0
 GOAL_COOLDOWN_S          = 900
 MAX_CONCURRENT_PROACTIVE = 3
 MAX_PROACTIVE_LOOP_TIME_S = 300   # hard cap per-run (5 min)
+# anomaly_verifier.verify_fix() runs the affected repo's test suite twice
+# (pre-fix + post-fix), each capped at its own internal 180s — bound the
+# whole verification step independently of the agent loop's 300s cap.
+VERIFICATION_TIMEOUT_S = 300
 
 # Autonomous server scan — runs independently of human activity
 AUTONOMOUS_SCAN_INTERVAL_S  = 600   # 10 minutes between full server scans
@@ -811,6 +817,15 @@ def _log_proactive_tool_calls(
             )
 
 
+_GIT_COMMIT_BRANCH_RE = re.compile(r"\[([^\s\]]+)\s+([0-9a-f]{6,40})\]")
+
+
+def _extract_commit_branch(output: str) -> str | None:
+    """Parse the branch name out of `git commit` output: '[branch sha] msg'."""
+    m = _GIT_COMMIT_BRANCH_RE.search(output)
+    return m.group(1) if m else None
+
+
 def _record_git_commits(
     user_id: str,
     project_id: str,
@@ -880,11 +895,13 @@ async def _run_proactive_loop(
     workdir = _resolve_proactive_workdir(trigger_ctx, user_id)
 
     scan_worktree: str | None = None
+    base_sha: str | None = None
     if trigger_type == "SERVER_SCAN":
         scan_worktree = await create_worktree(workdir)
         if scan_worktree:
             workdir = scan_worktree
             tool_defs = _get_tools_for_server_scan()
+            base_sha = await get_head_sha(scan_worktree)
         else:
             log.warning(
                 "SERVER_SCAN: could not create worktree for %s — "
@@ -952,7 +969,66 @@ async def _run_proactive_loop(
             _log_proactive_tool_calls(user_id, agent_rec.id, tool_events)
             _record_git_commits(user_id, intent_rec.project_id, workdir, tool_events)
 
-        return "".join(collected_chunks).strip()
+        result_text = "".join(collected_chunks).strip()
+
+        # Independent verification ("unfakeable verdict") — must run here,
+        # before the finally block removes scan_worktree. Re-runs the
+        # affected repo's test suite on base_sha vs. the agent's proposed
+        # rawos/fix-* branch and appends the verdict to the agent's own
+        # output, so it flows into whatever _run_proactive_agent does next
+        # (CONTRIBUTE -> episodic memory, SIGNAL -> manifest) without that
+        # function needing to know about worktrees at all.
+        if (
+            scan_worktree
+            and base_sha
+            and trigger_ctx
+            and trigger_ctx.get("anomaly_kind") in VERIFIABLE_ANOMALY_KINDS
+        ):
+            fix_branch = None
+            for ev in tool_events:
+                if (
+                    ev.get("type") == "tool_result"
+                    and ev.get("tool") == "git_commit"
+                    and ev.get("success")
+                ):
+                    fix_branch = _extract_commit_branch(ev.get("output", "")) or fix_branch
+            if fix_branch:
+                try:
+                    anomaly = ServerAnomaly(
+                        kind=trigger_ctx["anomaly_kind"],
+                        affected_path=trigger_ctx["repo_root"],
+                        service=trigger_ctx.get("service", ""),
+                        detail=trigger_ctx.get("anomaly_detail", ""),
+                        last_log="",
+                        severity=trigger_ctx.get("severity", 0),
+                    )
+                    verdict = await asyncio.wait_for(
+                        verify_fix(anomaly, scan_worktree, fix_branch, base_ref=base_sha),
+                        timeout=VERIFICATION_TIMEOUT_S,
+                    )
+                    result_text += (
+                        f"\n\n[INDEPENDENT VERIFICATION — rawos.kernel.anomaly_verifier]\n"
+                        f"resolved={verdict.resolved} method={verdict.method}\n{verdict.evidence}"
+                    )
+                except asyncio.TimeoutError:
+                    log.warning(
+                        "anomaly_verifier timeout (%ds) for user=%s branch=%s",
+                        VERIFICATION_TIMEOUT_S, user_id, fix_branch,
+                    )
+                    result_text += (
+                        "\n\n[INDEPENDENT VERIFICATION — timed out after "
+                        f"{VERIFICATION_TIMEOUT_S}s. Treat fix as UNVERIFIED.]"
+                    )
+                except Exception:
+                    log.exception(
+                        "anomaly_verifier failed for user=%s branch=%s", user_id, fix_branch,
+                    )
+                    result_text += (
+                        "\n\n[INDEPENDENT VERIFICATION — verifier raised an "
+                        "exception, see rawos logs. Treat fix as UNVERIFIED.]"
+                    )
+
+        return result_text
     finally:
         if scan_worktree:
             await remove_worktree(scan_worktree)
