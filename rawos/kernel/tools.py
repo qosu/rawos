@@ -395,10 +395,10 @@ async def _targets_rawos_own_repo(workdir: str) -> bool:
 # ---------------------------------------------------------------------------
 # Pass 2 — TIER enforcement helpers (self-modification of /root/rawos)
 #
-# Not yet wired into execute(). These are git-introspection helpers that the
-# execute() wrapper (Pass 2 step b) will use to detect and revert any tool
-# call's side effect that touches a TIER 0 path inside rawos's own source
-# tree. See PLAN.md "Phase 16 — Pass 2 — implementation design".
+# Wired into execute() via the wrapper below (Pass 2 step b, commit 31864421).
+# These git-introspection helpers detect and revert any tool call's side
+# effect that touches a TIER 0 path inside rawos's own source tree.
+# See PLAN.md "Phase 16 — Pass 2 — IMPLEMENTED (2026-06-09)".
 # ---------------------------------------------------------------------------
 
 _RAWOS_GIT_COMMON_DIR = "/root/rawos/.git"
@@ -503,7 +503,7 @@ async def _git_checkout_restore(workdir: str, path: str) -> BashResult:
     deleted entirely.
     """
     quoted = shlex.quote(path)
-    head_has_path = await run_bash(f"git cat-file -e HEAD:{quoted}", workdir)
+    head_has_path = await run_bash(f"git cat-file -e {shlex.quote('HEAD:' + path)}", workdir)
     if head_has_path.exit_code == 0:
         return await run_bash(f"git checkout HEAD -- {quoted}", workdir)
 
@@ -898,7 +898,18 @@ async def _execute_with_tier_enforcement(
 
     after_head = (await run_bash("git rev-parse HEAD", workdir)).stdout.strip()
     if before_head and after_head != before_head:
-        await run_bash(f"git reset --soft {before_head}", workdir)
+        reset_res = await run_bash(f"git reset --soft {before_head}", workdir)
+        if reset_res.exit_code != 0:
+            return ToolResult(
+                output=(
+                    result.output
+                    + f"\n\nTIER ENFORCEMENT ERROR: git reset --soft {before_head} failed "
+                    f"(exit {reset_res.exit_code}): {reset_res.stderr.strip()}. "
+                    "Worktree may be in an inconsistent state — manual inspection required."
+                ),
+                success=False,
+                duration_ms=result.duration_ms,
+            )
 
     after_status = await _git_status_porcelain(workdir)
     violations = await _tier_violations(workdir, before_status, after_status)

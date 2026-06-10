@@ -1,8 +1,8 @@
 """
-Phase 16 step d — the self-probe loop ships DORMANT (PLAN.md "Pass 2 —
-implementation design", step d). settings.self_probe_enabled defaults to
-False; while disabled, rawos_self_probe_loop() must log once and return
-immediately — no infinite loop, no sleep, no worktree side effects.
+Phase 16 step d — the self-probe loop ships DORMANT (commit 552b752e).
+settings.self_probe_enabled defaults to False; while disabled,
+rawos_self_probe_loop() logs once and returns immediately — no loop,
+no sleep, no worktree side effects. See PLAN.md Pass 2 — IMPLEMENTED.
 """
 import asyncio
 

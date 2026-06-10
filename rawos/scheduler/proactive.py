@@ -1451,8 +1451,9 @@ async def rawos_self_probe_loop() -> None:
     """
     Phase 16 self-modification entry point.
 
-    DORMANT by default (settings.self_probe_enabled = False) — see PLAN.md
-    "Phase 16 — Pass 2 — implementation design", step d. While disabled,
+    DORMANT by default (settings.self_probe_enabled = False, commit 552b752e)
+    — see PLAN.md "Phase 16 — Pass 2 — IMPLEMENTED (2026-06-09)". While
+    disabled,
     this logs once and returns immediately: no loop, no sleep, no side
     effects. A human must flip settings.self_probe_enabled to True after
     observing one manual self-probe worktree cycle.

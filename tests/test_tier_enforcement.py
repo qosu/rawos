@@ -1,10 +1,10 @@
 """
 Phase 16 Pass 2 — TIER enforcement helper tests.
 
-Covers the git-introspection helpers added in rawos/kernel/tools.py that
-the execute() wrapper (Pass 2 step b, not yet implemented) will use to
-detect and revert TIER 0 violations during self-modification of
-/root/rawos. See PLAN.md "Phase 16 — Pass 2 — implementation design".
+Covers the git-introspection helpers and execute() wrapper added in
+rawos/kernel/tools.py (commits ffab93e0 and 31864421) that detect and
+revert TIER 0 violations during self-modification of /root/rawos.
+See PLAN.md "Phase 16 — Pass 2 — IMPLEMENTED (2026-06-09)".
 """
 from __future__ import annotations
 

@@ -61,7 +61,7 @@ async def lifespan(app: FastAPI):
     snapshot_task      = asyncio.create_task(_daily_snapshot_loop(),              name="study-daily-snapshot")
     calendar_task      = asyncio.create_task(_calendar_sync_loop_task(),          name="calendar-sync")
     autonomous_task    = asyncio.create_task(_start_autonomous_scan(),             name="autonomous-server-scan")
-    self_probe_task    = asyncio.create_task(_start_self_probe_loop(),               name="rawos-self-probe")
+    self_probe_task    = asyncio.create_task(_start_self_probe_loop(),             name="rawos-self-probe")
 
     # Clean up intents orphaned by crash/restart — any still 'executing' after
     # MAX_PROACTIVE_LOOP_TIME_S+60s could not have been completed normally.
