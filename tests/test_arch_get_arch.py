@@ -7,7 +7,12 @@ from __future__ import annotations
 import pytest
 
 from rawos.kernel.arch import get_arch
-from rawos.kernel.arch.linux import LinuxLogReader, LinuxResourceProbe, LinuxServiceManager
+from rawos.kernel.arch.linux import (
+    LinuxLogReader,
+    LinuxResourceProbe,
+    LinuxServiceManager,
+    LinuxShellPolicy,
+)
 
 
 def test_get_arch_linux_returns_linux_resource_probe(monkeypatch):
@@ -26,6 +31,12 @@ def test_get_arch_linux_returns_linux_log_reader(monkeypatch):
     monkeypatch.setattr("sys.platform", "linux")
     backend = get_arch()
     assert isinstance(backend.log_reader, LinuxLogReader)
+
+
+def test_get_arch_linux_returns_linux_shell_policy(monkeypatch):
+    monkeypatch.setattr("sys.platform", "linux")
+    backend = get_arch()
+    assert isinstance(backend.shell_policy, LinuxShellPolicy)
 
 
 def test_get_arch_is_cached_singleton_per_os(monkeypatch):

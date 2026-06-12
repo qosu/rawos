@@ -12,9 +12,14 @@ from dataclasses import dataclass
 from functools import lru_cache
 
 from rawos.config import Settings
-from rawos.kernel.arch.base import LogReader, ResourceProbe, ServiceManager
+from rawos.kernel.arch.base import LogReader, ResourceProbe, ServiceManager, ShellPolicy
 from rawos.kernel.arch.detect import OS, current_os
-from rawos.kernel.arch.linux import LinuxLogReader, LinuxResourceProbe, LinuxServiceManager
+from rawos.kernel.arch.linux import (
+    LinuxLogReader,
+    LinuxResourceProbe,
+    LinuxServiceManager,
+    LinuxShellPolicy,
+)
 
 
 @dataclass(frozen=True)
@@ -22,6 +27,7 @@ class Backend:
     resource_probe: ResourceProbe
     service_manager: ServiceManager
     log_reader: LogReader
+    shell_policy: ShellPolicy
 
 
 @lru_cache(maxsize=None)
@@ -31,6 +37,7 @@ def _build_backend(os_: OS) -> Backend:
             resource_probe=LinuxResourceProbe(),
             service_manager=LinuxServiceManager(),
             log_reader=LinuxLogReader(),
+            shell_policy=LinuxShellPolicy(),
         )
     if os_ == OS.MACOS:
         raise NotImplementedError("macOS arch backend not yet implemented (Stage B)")

@@ -11,6 +11,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from rawos.kernel.arch import get_arch
+
 
 _OUTPUT_LIMIT = 50_000   # bytes max stdout+stderr captured
 _TIMEOUT      = 30       # seconds
@@ -59,12 +61,8 @@ async def run_bash(command: str, workdir: str) -> BashResult:
     """
     workdir_abs = str(Path(workdir).resolve())
 
-    # Wrap with resource limits: 512MB virtual memory, 100MB file writes, no fork bomb
-    wrapped = (
-        f"cd {workdir_abs!r} && "
-        "ulimit -v 524288 -f 102400 -u 256 2>/dev/null; "
-        + command
-    )
+    # Wrap with resource limits via the arch backend's ShellPolicy
+    wrapped, exec_kwargs = get_arch().shell_policy.wrap(command, workdir_abs)
 
     start = time.monotonic()
     try:
@@ -73,6 +71,7 @@ async def run_bash(command: str, workdir: str) -> BashResult:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=workdir_abs,
+            **exec_kwargs,
         )
         try:
             stdout_b, stderr_b = await asyncio.wait_for(

@@ -7,6 +7,7 @@ OS command directly.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Protocol
 
 
@@ -39,4 +40,24 @@ class LogReader(Protocol):
 
     def recent_errors(self, unit: str, since: str) -> str:
         """Return error-level log output for `unit` since `since`, or "" on failure/none."""
+        ...
+
+
+@dataclass(frozen=True)
+class ReadonlyWhitelist:
+    """Arch-specific subsets of the diagnostic read-only shell whitelist."""
+
+    systemctl_subcmds: frozenset[str]
+    journalctl_blocked: tuple[str, ...]
+
+
+class ShellPolicy(Protocol):
+    def wrap(self, command: str, workdir: str) -> tuple[str, dict]:
+        """Return (shell_cmd, exec_kwargs): the resource-limited shell command
+        to execute (with cd/ulimit prefix applied) and any extra kwargs for
+        the subprocess launcher."""
+        ...
+
+    def readonly_whitelist(self) -> ReadonlyWhitelist:
+        """Return the arch-specific systemctl/journalctl read-only whitelist subsets."""
         ...

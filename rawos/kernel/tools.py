@@ -16,6 +16,7 @@ from typing import Any, Callable, Awaitable
 import httpx
 
 from rawos.config import settings
+from rawos.kernel.arch import get_arch
 from rawos.kernel.sandbox import BashResult, PathTraversalError, run_bash, run_bash_in_container, validate_path
 
 log = logging.getLogger("rawos.tools")
@@ -110,17 +111,6 @@ _BASH_READONLY_GIT_SUBCMDS: frozenset[str] = frozenset({
     "log", "diff", "show", "status", "branch", "tag", "stash",
     "ls-files", "ls-tree", "rev-parse", "describe", "shortlog", "blame",
 })
-# Read-only systemctl subcommands — diagnosis only, never start/stop/restart/
-# enable/disable/reload/mask/daemon-reload etc.
-_BASH_READONLY_SYSTEMCTL_SUBCMDS: frozenset[str] = frozenset({
-    "status", "show", "cat", "is-active", "is-failed", "is-enabled",
-    "list-units", "list-unit-files", "list-timers",
-})
-# journalctl flags that mutate or destroy log data, or block forever — rejected
-# even though journalctl itself is otherwise read-only.
-_BASH_READONLY_JOURNALCTL_BLOCKED: tuple[str, ...] = (
-    "-f", "--follow", "--flush", "--rotate", "--sync", "--relinquish-var",
-)
 
 # Shell metacharacters that enable command chaining or subshell injection.
 # Checked against the raw command string before any parsing.
@@ -160,6 +150,8 @@ def _is_bash_readonly_safe(command: str) -> bool:
     if not all_tokens:
         return False
 
+    whitelist = get_arch().shell_policy.readonly_whitelist()
+
     # Reject file write redirection tokens — both space-separated (> file) and
     # no-space forms (>file, >>file) that shlex parses as a single token.
     for tok in all_tokens:
@@ -189,11 +181,11 @@ def _is_bash_readonly_safe(command: str) -> bool:
             continue
         if base == "git" and len(seg) >= 2 and seg[1] in _BASH_READONLY_GIT_SUBCMDS:
             continue
-        if base == "systemctl" and len(seg) >= 2 and seg[1] in _BASH_READONLY_SYSTEMCTL_SUBCMDS:
+        if base == "systemctl" and len(seg) >= 2 and seg[1] in whitelist.systemctl_subcmds:
             continue
         if base == "journalctl":
             if any(
-                tok in _BASH_READONLY_JOURNALCTL_BLOCKED or tok.startswith("--vacuum")
+                tok in whitelist.journalctl_blocked or tok.startswith("--vacuum")
                 for tok in seg[1:]
             ):
                 return False

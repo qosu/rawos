@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import subprocess
 
+from rawos.kernel.arch.base import ReadonlyWhitelist
+
 
 class LinuxResourceProbe:
     def disk_percent(self, path: str) -> int | None:
@@ -92,3 +94,24 @@ class LinuxLogReader:
         if r.returncode != 0:
             return ""
         return r.stdout.strip()
+
+
+class LinuxShellPolicy:
+    def wrap(self, command: str, workdir: str) -> tuple[str, dict]:
+        shell_cmd = (
+            f"cd {workdir!r} && "
+            "ulimit -v 524288 -f 102400 -u 256 2>/dev/null; "
+            + command
+        )
+        return shell_cmd, {}
+
+    def readonly_whitelist(self) -> ReadonlyWhitelist:
+        return ReadonlyWhitelist(
+            systemctl_subcmds=frozenset({
+                "status", "show", "cat", "is-active", "is-failed", "is-enabled",
+                "list-units", "list-unit-files", "list-timers",
+            }),
+            journalctl_blocked=(
+                "-f", "--follow", "--flush", "--rotate", "--sync", "--relinquish-var",
+            ),
+        )
