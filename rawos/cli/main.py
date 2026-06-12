@@ -4,7 +4,9 @@ rawos CLI — intent-native OS shell interface.
 Commands:
   rawos status   — current inferred intent + confidence
   rawos show     — proactive artifacts rawos has created
-  rawos goal     — submit an explicit goal
+  rawos goal     — submit an explicit goal, stream response live
+  rawos ask      — one-shot question, stream response live
+  rawos chat     — interactive multi-turn REPL
   rawos why      — explain why rawos created a file
   rawos watch    — live TUI (rich Live display)
   rawos login    — authenticate and save credentials
@@ -18,7 +20,7 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 import click
 import httpx
@@ -70,6 +72,96 @@ def _api(method: str, path: str, **kwargs: Any) -> dict:
         click.echo(f"API error {resp.status_code}: {resp.text[:200]}", err=True)
         sys.exit(1)
     return resp.json()
+
+
+def _api_stream(path: str, payload: dict) -> Iterator[dict]:
+    """Stream SSE events from a POST endpoint.
+
+    Uses unbounded read-timeout (read=None) because agent runs can be long.
+    Yields one parsed dict per ``data: {...}`` SSE frame.
+    Blank keepalive lines and non-``data:`` lines are skipped.
+    Mirrors ``_api``'s 401 / ≥400 error handling: echoes the error and exits.
+    """
+    token = _get_token()
+    url = _DEFAULT_URL.rstrip("/") + path
+    with httpx.Client(
+        timeout=httpx.Timeout(connect=10.0, read=None, write=None, pool=None)
+    ) as client:
+        with client.stream(
+            "POST",
+            url,
+            json=payload,
+            headers={"Authorization": f"Bearer {token}"},
+        ) as resp:
+            if resp.status_code == 401:
+                click.echo("Session expired. Run: rawos login", err=True)
+                sys.exit(1)
+            if resp.status_code >= 400:
+                click.echo(
+                    f"API error {resp.status_code}",
+                    err=True,
+                )
+                sys.exit(1)
+            for line in resp.iter_lines():
+                if not line or not line.startswith("data: "):
+                    continue
+                try:
+                    yield json.loads(line[6:])
+                except json.JSONDecodeError:
+                    continue
+
+
+def _resolve_project_id() -> str:
+    """Return the current project ID, falling back to the first project.
+
+    Exits with an error message if no project exists at all.
+    Mirrors the project-resolution logic previously inlined in ``goal``.
+    """
+    status_data = _api("get", "/context/status")
+    project_id = status_data.get("current_project_id")
+    if not project_id:
+        projects = _api("get", "/projects")
+        items = projects.get("projects", [])
+        if not items:
+            click.echo("No project found. Create one first.", err=True)
+            sys.exit(1)
+        project_id = items[0]["id"]
+    return project_id
+
+
+def _render_event(event: dict, console: Any) -> None:
+    """Dispatch one SSE event dict to terminal output.
+
+    Unknown event types are silently ignored for forward-compatibility
+    with future server-side event types.
+    """
+    ev_type = event.get("type")
+    if ev_type == "orchestrator_plan":
+        for i, task in enumerate(event.get("plan") or [], start=1):
+            console.print(f"[dim]{i}. {task.get('goal', '')}[/dim]")
+    elif ev_type == "agent_spawn":
+        console.print(
+            f"[dim]↳ spawned {event.get('agent_type', '')}: "
+            f"{event.get('goal', '')}[/dim]"
+        )
+    elif ev_type == "agent_status":
+        status = event.get("status", "")
+        color = "red" if status == "failed" else "dim"
+        console.print(f"[{color}]{status}[/{color}]", end=" ")
+    elif ev_type == "agent_output":
+        text = event.get("content") or ""
+        if text:
+            console.print(text, end="")
+    elif ev_type == "chunk":
+        text = event.get("text") or ""
+        if text:
+            console.print(text, end="")
+    elif ev_type == "tool_call":
+        tool = event.get("tool", "")
+        console.print(f"[dim]→ {tool}[/dim]")
+    elif ev_type == "error":
+        console.print(f"[red]{event.get('message', '')}[/red]")
+    # unknown type → silently ignored (forward-compatible)
 
 
 # ---------------------------------------------------------------------------
@@ -184,24 +276,13 @@ def show(limit: int) -> None:
 @cli.command()
 @click.argument("goal_text")
 def goal(goal_text: str) -> None:
-    """Submit an explicit goal to rawos."""
-    # For explicit goals, we send an intent directly to the user's current project
-    status_data = _api("get", "/context/status")
-    project_id = status_data.get("current_project_id")
-    if not project_id:
-        # Fall back to first project
-        projects = _api("get", "/projects")
-        items = projects.get("projects", [])
-        if not items:
-            click.echo("No project found. Create one first.", err=True)
-            sys.exit(1)
-        project_id = items[0]["id"]
-
-    click.echo(f"Goal submitted to project {project_id[:8]}…")
-    # We don't block waiting for streaming — just confirm submission
-    # Full streaming available via the API directly
-    click.echo(f"  \"{goal_text}\"")
-    click.echo("Use `rawos show` to see results when ready.")
+    """Submit an explicit goal to rawos and stream the response live."""
+    from rich.console import Console
+    console = Console()
+    project_id = _resolve_project_id()
+    for event in _api_stream("/intent", {"project_id": project_id, "message": goal_text}):
+        _render_event(event, console)
+    console.print()
 
 
 @cli.command()
@@ -1348,6 +1429,38 @@ def commits_cmd(limit: int) -> None:
         f"  To view: git show <hash>[/dim]"
     )
     console.print()
+
+
+@cli.command()
+@click.argument("message")
+def ask(message: str) -> None:
+    """Ask rawos a question or give a goal; stream the response live."""
+    from rich.console import Console
+    console = Console()
+    project_id = _resolve_project_id()
+    for event in _api_stream("/intent", {"project_id": project_id, "message": message}):
+        _render_event(event, console)
+    console.print()
+
+
+@cli.command()
+def chat() -> None:
+    """Interactive multi-turn REPL.  Type :q or exit to quit."""
+    from rich.console import Console
+    console = Console()
+    project_id = _resolve_project_id()
+    while True:
+        try:
+            message = click.prompt("rawos>", prompt_suffix=" ")
+        except (click.Abort, EOFError):
+            break
+        if message.strip() in (":q", "exit"):
+            break
+        if not message.strip():
+            continue
+        for event in _api_stream("/intent", {"project_id": project_id, "message": message}):
+            _render_event(event, console)
+        console.print()
 
 
 def main() -> None:
