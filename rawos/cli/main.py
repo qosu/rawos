@@ -170,8 +170,7 @@ def _resolve_project_id() -> str:
     status_data = _api("get", "/context/status")
     project_id = status_data.get("current_project_id")
     if not project_id:
-        projects = _api("get", "/projects")
-        items = projects.get("projects", [])
+        items = _api("get", "/projects")
         if not items:
             click.echo("No project found. Create one first.", err=True)
             sys.exit(1)

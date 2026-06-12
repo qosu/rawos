@@ -358,7 +358,7 @@ class TestResolveProjectId:
             if path == "/context/status":
                 return {"current_project_id": None}
             if path == "/projects":
-                return {"projects": [{"id": "proj-fallback"}]}
+                return [{"id": "proj-fallback"}]
             return {}
 
         with patch("rawos.cli.main._api", side_effect=_api_side):
@@ -370,7 +370,7 @@ class TestResolveProjectId:
             if path == "/context/status":
                 return {"current_project_id": None}
             if path == "/projects":
-                return {"projects": []}
+                return []
             return {}
 
         with patch("rawos.cli.main._api", side_effect=_api_side):
