@@ -68,9 +68,10 @@ class TestLinuxFrontDoorValidate:
             with patch("rawos.kernel.arch.linux.subprocess.run",
                        return_value=_mock_run(returncode=0)) as mock_run:
                 result = fd.validate()
-        mock_run.assert_called_once_with(
-            ["sshd", "-t"], capture_output=True, text=True, timeout=5.0
-        )
+        called_cmd = mock_run.call_args[0][0]
+        assert "sshd" in called_cmd[0], f"Expected sshd binary, got {called_cmd[0]}"
+        assert called_cmd[1] == "-t"
+        assert mock_run.call_args[1] == dict(capture_output=True, text=True, timeout=5.0)
         assert result is True
 
     def test_validate_returns_false_on_nonzero_exit(self):

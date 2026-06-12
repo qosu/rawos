@@ -205,8 +205,10 @@ class LinuxFrontDoor:
     def validate(self) -> bool:
         """Return True if `sshd -t` exits 0 (config is syntactically valid)."""
         try:
+            import shutil as _shutil
+            _sshd = _shutil.which("sshd") or "/usr/sbin/sshd"
             r = subprocess.run(
-                ["sshd", "-t"],
+                [_sshd, "-t"],
                 capture_output=True, text=True, timeout=5.0,
             )
         except Exception:

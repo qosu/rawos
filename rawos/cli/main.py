@@ -1640,7 +1640,8 @@ def frontdoor_install(revert_after: int) -> None:
     from rawos.kernel.arch.linux import LinuxFrontDoor
     from rawos.kernel.frontdoor import FrontDoorInstallError, install_with_deadman
 
-    rawos_bin = click.get_current_context().command_path.split()[0]
+    import shutil as _sh
+    rawos_bin = _sh.which("rawos") or os.path.abspath(sys.argv[0])
     entry_cmd = f"{rawos_bin} frontdoor enter"
 
     arch = LinuxFrontDoor()
