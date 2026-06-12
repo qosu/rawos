@@ -20,16 +20,16 @@ router = APIRouter()
 
 @router.get("/context/status")
 async def context_status(user=Depends(get_current_user)):
-    model = get_user_model(user["id"])
+    model = get_user_model(user.id)
     if not model:
         # Build it fresh from whatever events exist
         import asyncio
         model = await asyncio.get_event_loop().run_in_executor(
-            None, rebuild_user_model, user["id"]
+            None, rebuild_user_model, user.id
         )
-    intent = await infer_intent(user["id"])
+    intent = await infer_intent(user.id)
     return {
-        "user_id": user["id"],
+        "user_id": user.id,
         "inferred_stack": model.get("inferred_stack", []),
         "active_domains": model.get("active_domains", []),
         "current_project_id": model.get("current_project_id"),
@@ -49,14 +49,14 @@ async def context_goals(
     limit: int = Query(default=20, ge=1, le=100),
     user=Depends(get_current_user),
 ):
-    artifacts = list_proactive_artifacts(user["id"], limit=limit)
+    artifacts = list_proactive_artifacts(user.id, limit=limit)
     return {"proactive_artifacts": artifacts, "count": len(artifacts)}
 
 
 @router.post("/context/infer")
 async def context_infer_force(user=Depends(get_current_user)):
     """Force LLM re-inference, bypassing cache."""
-    intent = await infer_intent(user["id"], force_llm=True)
+    intent = await infer_intent(user.id, force_llm=True)
     return {
         "goal": intent.goal,
         "confidence": round(intent.confidence, 3),
