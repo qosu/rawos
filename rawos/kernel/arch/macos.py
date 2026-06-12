@@ -11,6 +11,8 @@ Differences vs Linux (all documented, not hidden):
   Relative since-strings ("N minutes ago") are converted to --last Nm/Nh.
 - ShellPolicy: ulimit without -v. Darwin does not support the virtual-memory
   cap flag (-v). Semantic gap: no hard address-space limit on macOS.
+- CrashReporter: scans /Library/Logs/DiagnosticReports for .crash/.ips files
+  by mtime. Process name is filename stem split on '_', index 0.
 """
 from __future__ import annotations
 

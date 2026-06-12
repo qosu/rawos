@@ -23,9 +23,27 @@ def _mock_run(stdout: str, returncode: int = 0) -> SimpleNamespace:
 def test_recent_crashes_returns_list_of_provider_names():
     reporter = WindowsCrashReporter()
     with patch("rawos.kernel.arch.windows.subprocess.run",
+               return_value=_mock_run("Chrome\nNotepad\n")):
+        result = reporter.recent_crashes("15 minutes ago")
+    assert result == ["Chrome", "Notepad"]
+
+
+def test_recent_crashes_returns_sorted():
+    """Protocol contract: sorted unique process names."""
+    reporter = WindowsCrashReporter()
+    with patch("rawos.kernel.arch.windows.subprocess.run",
                return_value=_mock_run("Notepad\nChrome\n")):
         result = reporter.recent_crashes("15 minutes ago")
-    assert result == ["Notepad", "Chrome"]
+    assert result == ["Chrome", "Notepad"]
+
+
+def test_recent_crashes_deduplicates_process_names():
+    """Same provider appearing multiple times must be collapsed to one entry."""
+    reporter = WindowsCrashReporter()
+    with patch("rawos.kernel.arch.windows.subprocess.run",
+               return_value=_mock_run("Chrome\nNotepad\nChrome\n")):
+        result = reporter.recent_crashes("15 minutes ago")
+    assert result == ["Chrome", "Notepad"]
 
 
 def test_recent_crashes_returns_empty_on_nonzero_exit():

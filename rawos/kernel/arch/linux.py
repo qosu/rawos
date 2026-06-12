@@ -22,8 +22,11 @@ class LinuxResourceProbe:
             return None
         if r.returncode != 0:
             return None
-        pct_str = r.stdout.strip().splitlines()[-1].strip().rstrip("%")
-        return int(pct_str)
+        try:
+            pct_str = r.stdout.strip().splitlines()[-1].strip().rstrip("%")
+            return int(pct_str)
+        except (IndexError, ValueError):
+            return None
 
 
 class LinuxServiceManager:

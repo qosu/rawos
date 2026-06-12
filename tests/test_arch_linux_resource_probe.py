@@ -52,3 +52,19 @@ def test_disk_percent_returns_none_on_exception():
     with patch("rawos.kernel.arch.linux.subprocess.run",
                side_effect=OSError("boom")):
         assert probe.disk_percent("/") is None
+
+
+def test_disk_percent_returns_none_on_empty_stdout():
+    """df exits 0 but stdout is empty — parse must not raise IndexError."""
+    probe = LinuxResourceProbe()
+    with patch("rawos.kernel.arch.linux.subprocess.run",
+               return_value=_mock_df("")):
+        assert probe.disk_percent("/") is None
+
+
+def test_disk_percent_returns_none_on_non_numeric_output():
+    """df exits 0 but last line has no numeric content — int() must not raise."""
+    probe = LinuxResourceProbe()
+    with patch("rawos.kernel.arch.linux.subprocess.run",
+               return_value=_mock_df("Use%\n")):
+        assert probe.disk_percent("/") is None

@@ -14,6 +14,9 @@ Differences vs Linux (all documented, not hidden):
 - ShellPolicy: PowerShell via cmd.exe passthrough. No ulimit — Job Objects are
   the Windows resource-limit mechanism but are not implemented here.
   Documented gap: no hard resource cap on Windows in this backend.
+- CrashReporter: Get-WinEvent Level=1 (Critical) from Application log.
+  Level=1 = application crashes via Windows Error Reporting.
+  Level=2 (Error) is used by LogReader.recent_errors() — intentionally distinct.
 """
 from __future__ import annotations
 
@@ -175,7 +178,8 @@ class WindowsCrashReporter:
             return []
         if r.returncode != 0:
             return []
-        return [line.strip() for line in r.stdout.strip().splitlines() if line.strip()]
+        names = {line.strip() for line in r.stdout.strip().splitlines() if line.strip()}
+        return sorted(names)
 
 
 class WindowsShellPolicy:
