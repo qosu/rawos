@@ -10,8 +10,9 @@ from rawos.config import settings
 from rawos.scheduler.proactive import rawos_self_probe_loop
 
 
-def test_self_probe_disabled_by_default():
-    assert settings.self_probe_enabled is False
+def test_self_probe_enabled_after_step_c_proof():
+    """Phase 16 Step D: enabled 2026-06-12 after manual worktree cycle proof (commit c97781cc)."""
+    assert settings.self_probe_enabled is True
 
 
 def test_self_probe_loop_returns_immediately_when_disabled(monkeypatch):

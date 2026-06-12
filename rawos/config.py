@@ -79,7 +79,7 @@ class Settings(BaseSettings):
     sandbox_docker: bool = True   # False in tests/dev; True = Docker container isolation
 
     # Phase 16 — self-modification
-    self_probe_enabled: bool = False   # dormant until a human enables it after a manual worktree cycle
+    self_probe_enabled: bool = True   # enabled 2026-06-12 after manual worktree cycle proof (commit c97781cc)
 
     # Stage 3 ("Earned, Reversible Autonomy") — graduated auto-apply
     autonomy_auto_apply_enabled: bool = False   # dormant until a (repo, anomaly_domain)
