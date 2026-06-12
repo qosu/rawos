@@ -105,5 +105,26 @@ def test_restart_runs_systemctl_restart():
     )
 
 
+def test_restart_returns_true_on_success():
+    mgr = LinuxServiceManager()
+    with patch("rawos.kernel.arch.linux.subprocess.run",
+               return_value=_mock_run("", returncode=0)):
+        assert mgr.restart("rawos.service") is True
+
+
+def test_restart_returns_false_on_failure():
+    mgr = LinuxServiceManager()
+    with patch("rawos.kernel.arch.linux.subprocess.run",
+               return_value=_mock_run("", returncode=1)):
+        assert mgr.restart("rawos.service") is False
+
+
+def test_restart_returns_false_on_exception():
+    mgr = LinuxServiceManager()
+    with patch("rawos.kernel.arch.linux.subprocess.run",
+               side_effect=OSError("systemd unavailable")):
+        assert mgr.restart("rawos.service") is False
+
+
 def test_supports_reversible_apply_is_true_on_linux():
     assert LinuxServiceManager().supports_reversible_apply is True

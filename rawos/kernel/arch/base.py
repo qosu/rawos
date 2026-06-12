@@ -28,8 +28,8 @@ class ServiceManager(Protocol):
         """Return True if the named unit is active/running."""
         ...
 
-    def restart(self, name: str) -> None:
-        """Restart the named unit."""
+    def restart(self, name: str) -> bool:
+        """Restart the named unit. Return True on success, False on failure."""
         ...
 
 

@@ -61,11 +61,15 @@ class LinuxServiceManager:
             return False
         return r.stdout.strip() == "active"
 
-    def restart(self, name: str) -> None:
-        subprocess.run(
-            ["systemctl", "restart", name],
-            capture_output=True, text=True, timeout=30.0,
-        )
+    def restart(self, name: str) -> bool:
+        try:
+            r = subprocess.run(
+                ["systemctl", "restart", name],
+                capture_output=True, text=True, timeout=30.0,
+            )
+        except Exception:
+            return False
+        return r.returncode == 0
 
 
 class LinuxLogReader:
