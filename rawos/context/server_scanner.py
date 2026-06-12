@@ -7,7 +7,6 @@ Returns severity-ranked anomalies rawos can act on.
 """
 from __future__ import annotations
 
-import subprocess
 import time
 from dataclasses import dataclass, field
 
@@ -106,33 +105,11 @@ def collect_server_state() -> ServerStateSnapshot:
 def _check_failed_services() -> list[ServerAnomaly]:
     """Detect systemd services currently in FAILED state. Severity 8."""
     try:
-        r = subprocess.run(
-            ["systemctl", "list-units", "--type=service", "--state=failed",
-             "--no-legend", "--no-pager", "--plain"],
-            capture_output=True, text=True, timeout=5.0,
-        )
-        if r.returncode != 0 or not r.stdout.strip():
-            return []
-
+        arch = get_arch()
         anomalies = []
-        for line in r.stdout.strip().splitlines():
-            parts = line.split()
-            if not parts:
-                continue
-            # LOAD=not-found means the unit file was removed but systemd
-            # still tracks the stale failed state. Skip — not an active failure.
-            if len(parts) >= 2 and parts[1] == "not-found":
-                continue
-            service = parts[0].rstrip()
+        for service in arch.service_manager.list_failed():
             name = service.removesuffix(".service")
-
-            log_r = subprocess.run(
-                ["journalctl", "-u", service, "-n", "8", "--no-pager", "-q",
-                 "--output=short-monotonic"],
-                capture_output=True, text=True, timeout=3.0,
-            )
-            last_log = log_r.stdout.strip()[-600:] if log_r.returncode == 0 else ""
-
+            last_log = arch.log_reader.tail(service, 8)[-600:]
             repo = _SERVICE_TO_REPO.get(name, "/root")
             anomalies.append(ServerAnomaly(
                 kind="service_failed",
@@ -150,16 +127,12 @@ def _check_failed_services() -> list[ServerAnomaly]:
 def _check_recent_errors() -> list[ServerAnomaly]:
     """Detect ERROR/CRITICAL logs in monitored services in the last 15 minutes. Severity 6."""
     anomalies = []
+    arch = get_arch()
     for svc_name in _MONITORED_SERVICES:
         svc_unit = f"{svc_name}.service"
         try:
-            r = subprocess.run(
-                ["journalctl", "-u", svc_unit, "--since", "15 minutes ago",
-                 "-p", "err", "-q", "--no-pager", "--output=short"],
-                capture_output=True, text=True, timeout=3.0,
-            )
-            output = r.stdout.strip()
-            if r.returncode == 0 and output:
+            output = arch.log_reader.recent_errors(svc_unit, "15 minutes ago")
+            if output:
                 repo = _SERVICE_TO_REPO.get(svc_name, "/root")
                 anomalies.append(ServerAnomaly(
                     kind="service_error",

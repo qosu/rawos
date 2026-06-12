@@ -14,3 +14,29 @@ class ResourceProbe(Protocol):
     def disk_percent(self, path: str) -> int | None:
         """Return disk usage percent for `path`, or None if the probe failed."""
         ...
+
+
+class ServiceManager(Protocol):
+    supports_reversible_apply: bool
+
+    def list_failed(self) -> list[str]:
+        """Return unit names currently in a FAILED state."""
+        ...
+
+    def is_active(self, name: str) -> bool:
+        """Return True if the named unit is active/running."""
+        ...
+
+    def restart(self, name: str) -> None:
+        """Restart the named unit."""
+        ...
+
+
+class LogReader(Protocol):
+    def tail(self, unit: str, n: int) -> str:
+        """Return the last `n` log lines for `unit`, or "" on failure."""
+        ...
+
+    def recent_errors(self, unit: str, since: str) -> str:
+        """Return error-level log output for `unit` since `since`, or "" on failure/none."""
+        ...
