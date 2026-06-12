@@ -929,18 +929,30 @@ async def _execute_with_tier_enforcement(
 
     after_head = (await run_bash("git rev-parse HEAD", workdir)).stdout.strip()
     if before_head and after_head != before_head:
-        reset_res = await run_bash(f"git reset --soft {before_head}", workdir)
-        if reset_res.exit_code != 0:
-            return ToolResult(
-                output=(
-                    result.output
-                    + f"\n\nTIER ENFORCEMENT ERROR: git reset --soft {before_head} failed "
-                    f"(exit {reset_res.exit_code}): {reset_res.stderr.strip()}. "
-                    "Worktree may be in an inconsistent state — manual inspection required."
-                ),
-                success=False,
-                duration_ms=result.duration_ms,
-            )
+        diff_res = await run_bash(
+            f"git diff --name-only {before_head} {after_head}", workdir
+        )
+        committed_paths = (
+            set(diff_res.stdout.strip().splitlines())
+            if diff_res.exit_code == 0
+            else set()
+        )
+        commit_has_tier0_path = diff_res.exit_code != 0 or any(
+            not _in_tier1_allowlist(p) for p in committed_paths if p
+        )
+        if commit_has_tier0_path:
+            reset_res = await run_bash(f"git reset --soft {before_head}", workdir)
+            if reset_res.exit_code != 0:
+                return ToolResult(
+                    output=(
+                        result.output
+                        + f"\n\nTIER ENFORCEMENT ERROR: git reset --soft {before_head} failed "
+                        f"(exit {reset_res.exit_code}): {reset_res.stderr.strip()}. "
+                        "Worktree may be in an inconsistent state — manual inspection required."
+                    ),
+                    success=False,
+                    duration_ms=result.duration_ms,
+                )
 
     after_status = await _git_status_porcelain(workdir)
     violations = await _tier_violations(workdir, before_status, after_status)

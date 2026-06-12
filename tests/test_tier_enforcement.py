@@ -352,6 +352,27 @@ class TestExecuteWrapper:
         assert result.success
         assert (repo / "rawos" / "api" / "app.py").read_text() == "y"
 
+    def test_pure_tier1_commit_head_advances(self, tmp_path, monkeypatch):
+        """A git commit touching only TIER 1 paths must not be reverted -- HEAD must advance."""
+        from rawos.kernel.tools import execute
+        repo = self._setup_repo(tmp_path)
+        self._patch_common_dir(monkeypatch, repo)
+        _git("checkout", "-qb", "rawos/test-branch", cwd=str(repo))
+        before_head = self._head(repo)
+
+        cmd = (
+            "echo 'def test_dataset(): assert True' > tests/test_new_thing.py && "
+            "git add -A && "
+            "git -c user.name=t -c user.email=t@t.com commit -qm 'rawos: tier1 test'"
+        )
+        result = asyncio.run(execute("bash", {"command": cmd}, str(repo)))
+
+        assert result.success, f"clean TIER1 commit unexpectedly failed: {result.output}"
+        assert self._head(repo) != before_head, (
+            "HEAD did not advance -- TIER enforcement incorrectly reset a clean TIER1 commit"
+        )
+        assert (repo / "tests" / "test_new_thing.py").exists()
+
 
 # ---------------------------------------------------------------------------
 # TestEscapeVectors — out-of-worktree write vectors that worktree git status
