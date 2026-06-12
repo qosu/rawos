@@ -75,3 +75,16 @@ async def context_why(
     if not prov:
         raise HTTPException(status_code=404, detail="no provenance found for this file")
     return prov
+
+
+@router.post("/context/session_start")
+async def session_start(user=Depends(get_current_user)):
+    """Return proactive artifacts since last chat, then update last_chat_at."""
+    import time
+    import rawos.db as _db
+
+    last_chat_at = _db.get_last_chat_at(user.id)
+    artifacts = _db.get_proactive_artifacts_since(user.id, since_ts=last_chat_at)
+    _db.set_last_chat_at(user.id, int(time.time()))
+
+    return {"last_chat_at": last_chat_at, "artifacts": artifacts}

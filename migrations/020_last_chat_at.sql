@@ -1,0 +1,1 @@
+ALTER TABLE user_model ADD COLUMN last_chat_at INTEGER NOT NULL DEFAULT 0;

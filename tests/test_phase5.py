@@ -132,6 +132,10 @@ class TestAdminRoutes:
         db2.create_user(self.admin)
         db2.create_user(self.nonadmin)
 
+    def teardown_method(self):
+        from rawos.api.app import app
+        app.dependency_overrides.clear()
+
     def _app(self, user_id: str):
         from fastapi.testclient import TestClient
         from rawos.api.app import app

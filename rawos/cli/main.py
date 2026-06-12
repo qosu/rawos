@@ -1492,12 +1492,29 @@ def ask(message: str) -> None:
     console.print()
 
 
+def _show_session_digest(console: Any) -> None:
+    """Call session_start, print digest if proactive work was done since last chat."""
+    try:
+        data = _api("post", "/context/session_start")
+    except SystemExit:
+        return
+    artifacts = data.get("artifacts") or []
+    if not artifacts:
+        return
+    console.print("\n[bold cyan]While you were away:[/bold cyan]")
+    for item in artifacts:
+        goal = item.get("goal", "")
+        confidence = item.get("confidence", 0.0)
+        console.print(f"  [dim]•[/dim] {goal} [dim](confidence: {confidence:.0%})[/dim]")
+    console.print()
+
 @cli.command()
 def chat() -> None:
     """Interactive multi-turn REPL.  Type :q or exit to quit."""
     from rich.console import Console
     console = Console()
     project_id = _resolve_project_id()
+    _show_session_digest(console)
     while True:
         try:
             message = click.prompt("rawos>", prompt_suffix=" ")

@@ -503,3 +503,48 @@ class TestGoalRegression:
             result = runner.invoke(cli, ["goal", "do something"])
         assert "Use `rawos show`" not in result.output
         assert "Full streaming available" not in result.output
+
+
+
+# ---------------------------------------------------------------------------
+# 7. `rawos chat` digest greeting — "While you were away"
+# ---------------------------------------------------------------------------
+
+class TestChatDigestGreeting:
+    def _run(self, input_text: str, session_response: dict, stream_events=None):
+        runner = CliRunner()
+        with patch("rawos.cli.main._resolve_project_id", return_value="proj-test"), \
+             patch("rawos.cli.main._api_stream", return_value=iter(stream_events or [])), \
+             patch("rawos.cli.main._api", return_value=session_response) as mock_api:
+            result = runner.invoke(cli, ["chat"], input=input_text)
+        return result, mock_api
+
+    def test_chat_calls_session_start_before_repl(self):
+        result, mock_api = self._run(":q\n", {"last_chat_at": 0, "artifacts": []})
+        mock_api.assert_called_once_with("post", "/context/session_start")
+
+    def test_chat_shows_digest_header_when_artifacts_present(self):
+        session = {
+            "last_chat_at": 1_000_000,
+            "artifacts": [
+                {"goal": "refactored auth module", "confidence": 0.92, "file_path": "/tmp/auth.py", "created_at": 1_000_100},
+            ],
+        }
+        result, _ = self._run(":q\n", session)
+        assert "While you were away" in result.output
+        assert "refactored auth module" in result.output
+
+    def test_chat_shows_no_digest_when_no_artifacts(self):
+        result, _ = self._run(":q\n", {"last_chat_at": 0, "artifacts": []})
+        assert "While you were away" not in result.output
+
+    def test_chat_continues_to_repl_after_digest(self):
+        session = {"last_chat_at": 0, "artifacts": []}
+        events = [{"type": "chunk", "text": "hello from rawos"}]
+        with patch("rawos.cli.main._resolve_project_id", return_value="proj-test"), \
+             patch("rawos.cli.main._api_stream", return_value=iter(events)), \
+             patch("rawos.cli.main._api", return_value=session):
+            runner = CliRunner()
+            result = runner.invoke(cli, ["chat"], input="hi\n:q\n")
+        assert "hello from rawos" in result.output
+        assert result.exit_code == 0

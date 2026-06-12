@@ -695,3 +695,37 @@ def get_workdir_by_project_id(project_id: str) -> str | None:
             (project_id,),
         ).fetchone()
     return row["workdir"] if row else None
+
+
+def get_last_chat_at(user_id: str) -> int:
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT last_chat_at FROM user_model WHERE user_id = ? LIMIT 1",
+            (user_id,),
+        ).fetchone()
+    return row["last_chat_at"] if row else 0
+
+
+def set_last_chat_at(user_id: str, ts: int) -> None:
+    with _conn() as conn:
+        conn.execute(
+            """INSERT INTO user_model (user_id, last_chat_at)
+               VALUES (?, ?)
+               ON CONFLICT(user_id) DO UPDATE SET last_chat_at = excluded.last_chat_at""",
+            (user_id, ts),
+        )
+
+
+def get_proactive_artifacts_since(
+    user_id: str, since_ts: int, limit: int = 10
+) -> list[dict]:
+    with _conn() as conn:
+        rows = conn.execute(
+            """SELECT goal, confidence, file_path, created_at
+               FROM proactive_artifacts
+               WHERE user_id = ? AND created_at > ?
+               ORDER BY created_at DESC
+               LIMIT ?""",
+            (user_id, since_ts, limit),
+        ).fetchall()
+    return [dict(r) for r in rows]
