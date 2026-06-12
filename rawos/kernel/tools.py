@@ -401,7 +401,7 @@ async def _targets_rawos_own_repo(workdir: str) -> bool:
     mutates the live runtime tree and can crash-loop the entity itself.
     """
     res: BashResult = await run_bash("git rev-parse --show-toplevel", workdir)
-    return res.exit_code == 0 and res.stdout.strip() == "/root/rawos"
+    return res.exit_code == 0 and res.stdout.strip() == settings.rawos_source_root
 
 
 # ---------------------------------------------------------------------------
@@ -413,7 +413,9 @@ async def _targets_rawos_own_repo(workdir: str) -> bool:
 # See PLAN.md "Phase 16 — Pass 2 — IMPLEMENTED (2026-06-09)".
 # ---------------------------------------------------------------------------
 
-_RAWOS_GIT_COMMON_DIR = "/root/rawos/.git"
+
+
+_RAWOS_GIT_COMMON_DIR: str = settings.rawos_source_root + "/.git"
 
 _TIER1_PREFIXES: tuple[str, ...] = (
     "tests/",
