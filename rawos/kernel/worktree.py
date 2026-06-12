@@ -21,11 +21,12 @@ import time
 import uuid
 from pathlib import Path
 
+from rawos.config import settings
 from rawos.kernel.sandbox import SandboxError, run_bash
 
 log = logging.getLogger("rawos.kernel.worktree")
 
-WORKTREE_ROOT = Path("/root/.rawos-worktrees")
+WORKTREE_ROOT = Path(settings.worktree_root)
 
 
 async def create_worktree(repo_path: str) -> str | None:
