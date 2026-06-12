@@ -1597,7 +1597,13 @@ def frontdoor_enter() -> None:
     shell = os.environ.get("SHELL", "/bin/bash")
 
     if action.kind == EntryActionKind.PASSTHROUGH:
-        os.execvp(shell, [shell, "-c", action.command])
+        if action.command == "subsystem sftp":
+            # sshd sends SSH_ORIGINAL_COMMAND="subsystem sftp" for sftp sessions.
+            # ForceCommand intercepts it -- must exec sftp-server directly.
+            _sftp = "/usr/lib/openssh/sftp-server"
+            os.execv(_sftp, [_sftp])
+        else:
+            os.execvp(shell, [shell, "-c", action.command])
 
     elif action.kind == EntryActionKind.LAUNCH_CHAT:
         # exec into rawos chat — replaces this process so the session

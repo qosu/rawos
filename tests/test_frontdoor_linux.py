@@ -205,3 +205,48 @@ class TestLinuxFrontDoorSnapshotRestore:
             s = fd.state()
         assert s.installed is False
         assert s.entry_command is None
+
+# ---------------------------------------------------------------------------
+# enter command — sftp subsystem passthrough
+# ---------------------------------------------------------------------------
+
+class TestFrontDoorEnterSftpPassthrough:
+    """enter must exec sftp-server directly for SSH_ORIGINAL_COMMAND='subsystem sftp'."""
+
+    def _run_enter(self, ssh_cmd: str, mock_execv, mock_execvp):
+        import os
+        from unittest.mock import patch, MagicMock
+        from click.testing import CliRunner
+        from rawos.cli.main import cli
+
+        runner = CliRunner()
+        with patch.dict(os.environ, {"SSH_ORIGINAL_COMMAND": ssh_cmd, "SHELL": "/bin/bash"}), \
+             patch("rawos.cli.main._load_creds", return_value={"access_token": "tok"}), \
+             patch("rawos.cli.main._DEFAULT_URL", "http://127.0.0.1:8002"), \
+             patch("httpx.get", return_value=MagicMock(status_code=200)), \
+             patch("os.execv", mock_execv), \
+             patch("os.execvp", mock_execvp):
+            result = runner.invoke(cli, ["frontdoor", "enter"])
+        return result
+
+    def test_sftp_subsystem_execs_sftp_server_binary(self):
+        from unittest.mock import MagicMock
+        mock_execv = MagicMock(side_effect=SystemExit(0))
+        mock_execvp = MagicMock(side_effect=SystemExit(0))
+        self._run_enter("subsystem sftp", mock_execv, mock_execvp)
+        mock_execv.assert_called_once()
+        called_path = mock_execv.call_args[0][0]
+        assert "sftp-server" in called_path, f"Expected sftp-server binary, got {called_path}"
+        mock_execvp.assert_not_called()
+
+    def test_regular_command_uses_shell_passthrough(self):
+        """Non-sftp commands still go through shell -c."""
+        from unittest.mock import MagicMock
+        mock_execv = MagicMock(side_effect=SystemExit(0))
+        mock_execvp = MagicMock(side_effect=SystemExit(0))
+        self._run_enter("git-upload-pack '/repo'", mock_execv, mock_execvp)
+        mock_execvp.assert_called_once()
+        called = mock_execvp.call_args[0]
+        assert called[0] == "/bin/bash"
+        assert called[1] == ["/bin/bash", "-c", "git-upload-pack '/repo'"]
+        mock_execv.assert_not_called()
