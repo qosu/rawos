@@ -1529,6 +1529,198 @@ def chat() -> None:
         console.print()
 
 
+
+
+# ---------------------------------------------------------------------------
+# frontdoor command group
+# ---------------------------------------------------------------------------
+
+@cli.group()
+def frontdoor() -> None:
+    """Manage the rawos front-door (login = being).
+
+    When installed, an interactive SSH login to this host launches the rawos
+    AI session instead of a raw shell. Any explicit SSH command (scp, rsync,
+    git, bash) passes through unchanged — the front-door never breaks tooling.
+    """
+
+
+@frontdoor.command("enter")
+def frontdoor_enter() -> None:
+    """ForceCommand target — decides and exec()s the entry action.
+
+    Called by sshd for every login after `rawos frontdoor install` has
+    activated.  Must not be called manually; has no interactive UI.
+
+    Exit codes mirror standard shell conventions so scp/rsync/git see no
+    difference from a normal shell.
+    """
+    import os
+    import sys
+
+    import httpx
+
+    from rawos.kernel.frontdoor import (
+        EntryActionKind,
+        FrontDoorPolicy,
+        decide_entry,
+    )
+
+    ssh_cmd = os.environ.get("SSH_ORIGINAL_COMMAND", "")
+    creds = _load_creds()
+    has_token = bool(creds.get("access_token", ""))
+
+    # Probe /health — fail-open: if probe itself fails, mark unhealthy
+    try:
+        resp = httpx.get(
+            _DEFAULT_URL.rstrip("/") + "/health",
+            timeout=2.0,
+        )
+        rawos_healthy = resp.status_code == 200
+    except Exception:
+        rawos_healthy = False
+
+    audit_dir = _CONFIG_DIR / "audit"
+    audit_dir.mkdir(parents=True, exist_ok=True)
+    policy = FrontDoorPolicy(
+        fail_open=True,
+        health_url=_DEFAULT_URL.rstrip("/") + "/health",
+        audit_path=str(audit_dir / "frontdoor.log"),
+    )
+    ctx = {
+        "ssh_original_command": ssh_cmd,
+        "rawos_healthy": rawos_healthy,
+        "has_token": has_token,
+    }
+    action = decide_entry(ctx, policy)
+
+    shell = os.environ.get("SHELL", "/bin/bash")
+
+    if action.kind == EntryActionKind.PASSTHROUGH:
+        os.execvp(shell, [shell, "-c", action.command])
+
+    elif action.kind == EntryActionKind.LAUNCH_CHAT:
+        # exec into rawos chat — replaces this process so the session
+        # becomes the chat process (no double shell)
+        rawos_bin = sys.argv[0]
+        os.execvp(rawos_bin, [rawos_bin, "chat"])
+
+    else:  # FAIL_OPEN_SHELL
+        click.echo(
+            "\n⚠  rawos is unavailable or not authenticated. "
+            "Dropping to raw shell.\n",
+            err=True,
+        )
+        os.execvp(shell, [shell, "--login"])
+
+
+@frontdoor.command("install")
+@click.option(
+    "--revert-after",
+    default=300,
+    show_default=True,
+    help="Seconds until the dead-man's-switch auto-reverts if not committed.",
+)
+def frontdoor_install(revert_after: int) -> None:
+    """Install the front-door with an auto-revert safety harness.
+
+    The front-door goes LIVE immediately but will self-revert in --revert-after
+    seconds unless you run `rawos frontdoor commit`.
+
+    Verify sequence (do this in a NEW terminal before committing):
+    \b
+      ssh root@<host>                  → should land in rawos chat
+      ssh -t root@<host> bash          → should drop to raw shell (escape)
+      scp / rsync / git                → should still work
+      systemctl stop rawos && ssh ...  → should drop to shell + notice (fail-open)
+      systemctl start rawos
+
+    Once all checks pass:  rawos frontdoor commit
+    """
+    from rawos.kernel.arch.linux import LinuxFrontDoor
+    from rawos.kernel.frontdoor import FrontDoorInstallError, install_with_deadman
+
+    rawos_bin = click.get_current_context().command_path.split()[0]
+    entry_cmd = f"{rawos_bin} frontdoor enter"
+
+    arch = LinuxFrontDoor()
+
+    click.echo(f"Installing front-door (revert in {revert_after}s if not committed)…")
+    try:
+        install_with_deadman(arch, entry_cmd, revert_after_s=revert_after)
+    except FrontDoorInstallError as exc:
+        click.echo(f"✗ {exc}", err=True)
+        raise SystemExit(1) from exc
+
+    click.echo("✓ Front-door LIVE and armed.")
+    click.echo(f"  Verify in a NEW terminal, then:  rawos frontdoor commit")
+    click.echo(f"  Auto-reverts in {revert_after}s if you do nothing.")
+
+
+@frontdoor.command("commit")
+def frontdoor_commit() -> None:
+    """Disarm the auto-revert timer after verifying the front-door works.
+
+    Run this only after a new SSH session has confirmed:
+    - interactive login lands in the AI, and
+    - escape hatch (ssh -t host bash) drops to a raw shell.
+    """
+    from rawos.kernel.frontdoor import commit
+
+    commit()
+    click.echo("✓ Auto-revert disarmed. Front-door is permanent until uninstalled.")
+
+
+@frontdoor.command("status")
+def frontdoor_status() -> None:
+    """Show current front-door installation state."""
+    from rawos.kernel.arch.linux import LinuxFrontDoor
+
+    state = LinuxFrontDoor().state()
+    if state.installed:
+        click.echo(f"installed: yes")
+        click.echo(f"entry_command: {state.entry_command}")
+        click.echo(f"config_path: {state.config_path}")
+    else:
+        click.echo("installed: no")
+
+
+@frontdoor.command("uninstall")
+def frontdoor_uninstall() -> None:
+    """Remove the front-door configuration and reload sshd.
+
+    After this, interactive SSH logins return to the default shell.
+    Requires a running SSH session (does not use the dead-man's-switch;
+    uninstall is a manual, deliberate action).
+    """
+    from rawos.kernel.arch.linux import LinuxFrontDoor
+
+    arch = LinuxFrontDoor()
+    arch.uninstall()
+    if arch.validate():
+        arch.reload()
+        click.echo("✓ Front-door removed and sshd reloaded.")
+    else:
+        click.echo(
+            "✗ sshd -t failed after uninstall (unexpected). "
+            "Manual check required.",
+            err=True,
+        )
+        raise SystemExit(1)
+
+
+@frontdoor.command("_revert", hidden=True)
+@click.argument("snapshot")
+def frontdoor_revert(snapshot: str) -> None:
+    """Internal: restore a snapshot and reload sshd (used by the dead-man's-switch timer)."""
+    from rawos.kernel.arch.linux import LinuxFrontDoor
+
+    arch = LinuxFrontDoor()
+    arch.restore(snapshot)
+    if arch.validate():
+        arch.reload()
+    # Intentionally silent — this runs as a systemd transient unit
+
 def main() -> None:
     cli()
 

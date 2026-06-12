@@ -71,3 +71,50 @@ class CrashReporter(Protocol):
         Returns [] on failure, permission error, or no desktop crash context.
         """
         ...
+
+
+@dataclass(frozen=True)
+class FrontDoorState:
+    """State snapshot of the front-door installation on a host."""
+
+    installed: bool
+    entry_command: str | None
+    config_path: str | None
+
+
+class FrontDoor(Protocol):
+    """OS-specific mechanism for making an interactive login invoke rawos.
+
+    The kernel uses only this Protocol; every arch backend implements it.
+    install() must validate the configuration before persisting (never write
+    a config that sshd -t rejects). reload() is called separately so the
+    caller controls exactly when the change takes effect.
+    """
+
+    def install(self, entry_command: str) -> None:
+        """Configure the host so that an interactive login invokes entry_command."""
+        ...
+
+    def uninstall(self) -> None:
+        """Remove the front-door configuration; restore the prior login behavior."""
+        ...
+
+    def state(self) -> FrontDoorState:
+        """Return the current front-door installation state."""
+        ...
+
+    def validate(self) -> bool:
+        """Return True if the pending/active config passes a syntactic check (e.g. sshd -t)."""
+        ...
+
+    def reload(self) -> None:
+        """Signal the login service to reload its configuration."""
+        ...
+
+    def snapshot(self) -> str:
+        """Return an opaque token representing the current config state for revert."""
+        ...
+
+    def restore(self, snapshot: str) -> None:
+        """Roll back the config to the state captured by snapshot()."""
+        ...

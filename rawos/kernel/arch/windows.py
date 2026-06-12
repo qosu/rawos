@@ -207,3 +207,36 @@ class WindowsShellPolicy:
             systemctl_subcmds=frozenset(),
             journalctl_blocked=(),
         )
+
+
+class WindowsFrontDoor:
+    """Windows front-door backend — NOT YET IMPLEMENTED.
+
+    Documented limitation: Windows does not use sshd_config ForceCommand.
+    The equivalent is OpenSSH for Windows with a custom default shell
+    (HKLM\\SOFTWARE\\OpenSSH\\DefaultShell registry key). Deferred until a
+    Windows host is available for canary testing.
+
+    The Protocol seam exists; this stub makes the gap explicit.
+    """
+
+    def install(self, entry_command: str) -> None:
+        raise NotImplementedError("front-door backend not yet implemented for Windows")
+
+    def uninstall(self) -> None:
+        raise NotImplementedError("front-door backend not yet implemented for Windows")
+
+    def state(self):
+        raise NotImplementedError("front-door backend not yet implemented for Windows")
+
+    def validate(self) -> bool:
+        raise NotImplementedError("front-door backend not yet implemented for Windows")
+
+    def reload(self) -> None:
+        raise NotImplementedError("front-door backend not yet implemented for Windows")
+
+    def snapshot(self) -> str:
+        raise NotImplementedError("front-door backend not yet implemented for Windows")
+
+    def restore(self, snapshot: str) -> None:
+        raise NotImplementedError("front-door backend not yet implemented for Windows")

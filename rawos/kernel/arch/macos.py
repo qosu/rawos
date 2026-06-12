@@ -231,3 +231,37 @@ class MacOSShellPolicy:
             systemctl_subcmds=frozenset(),
             journalctl_blocked=(),
         )
+
+
+class MacOSFrontDoor:
+    """macOS front-door backend — NOT YET IMPLEMENTED.
+
+    Documented limitation: macOS uses sshd differently from Linux (launchd
+    instead of systemd; no drop-in config dir). The sshd_config mechanism
+    works but needs path adjustments and launchctl reload instead of
+    systemctl. Deferred until a macOS host is available for live canary.
+
+    The Protocol seam exists; this stub makes the gap explicit rather than
+    hidden.
+    """
+
+    def install(self, entry_command: str) -> None:
+        raise NotImplementedError("front-door backend not yet implemented for macOS")
+
+    def uninstall(self) -> None:
+        raise NotImplementedError("front-door backend not yet implemented for macOS")
+
+    def state(self):
+        raise NotImplementedError("front-door backend not yet implemented for macOS")
+
+    def validate(self) -> bool:
+        raise NotImplementedError("front-door backend not yet implemented for macOS")
+
+    def reload(self) -> None:
+        raise NotImplementedError("front-door backend not yet implemented for macOS")
+
+    def snapshot(self) -> str:
+        raise NotImplementedError("front-door backend not yet implemented for macOS")
+
+    def restore(self, snapshot: str) -> None:
+        raise NotImplementedError("front-door backend not yet implemented for macOS")

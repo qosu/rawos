@@ -133,3 +133,135 @@ class LinuxShellPolicy:
                 "-f", "--follow", "--flush", "--rotate", "--sync", "--relinquish-var",
             ),
         )
+
+
+class LinuxFrontDoor:
+    """Linux implementation of the FrontDoor Protocol.
+
+    Mechanism: an sshd drop-in file at
+    /etc/ssh/sshd_config.d/50-rawos-frontdoor.conf containing a
+    `Match User root / ForceCommand ...` block.
+
+    The drop-in dir keeps the main sshd_config pristine.  All mutations
+    go through validate() (sshd -t) before reload(), so a broken config
+    can never take effect on the live daemon.
+
+    Backup tokens (snapshot / restore) are timestamped copies of the
+    drop-in file stored alongside it; if the drop-in does not exist,
+    the sentinel string "ABSENT" represents "no front-door installed".
+    """
+
+    _MANAGED_COMMENT = "# Managed by rawos — do not edit manually.\n"
+    _ABSENT_SENTINEL = "ABSENT"
+
+    def __init__(
+        self,
+        dropin_path: "str | Path | None" = None,
+    ) -> None:
+        from pathlib import Path
+        self._dropin = Path(dropin_path) if dropin_path is not None else Path(
+            "/etc/ssh/sshd_config.d/50-rawos-frontdoor.conf"
+        )
+
+    # ------------------------------------------------------------------
+    # FrontDoor Protocol implementation
+    # ------------------------------------------------------------------
+
+    def install(self, entry_command: str) -> None:
+        """Write the sshd drop-in block.
+
+        Does NOT call validate() or reload() — the caller controls that
+        (install_with_deadman orchestrates the full sequence).
+        """
+        content = (
+            self._MANAGED_COMMENT
+            + "Match User root\n"
+            + f"    ForceCommand {entry_command}\n"
+        )
+        self._dropin.parent.mkdir(parents=True, exist_ok=True)
+        self._dropin.write_text(content)
+
+    def uninstall(self) -> None:
+        """Remove the drop-in file if it exists (idempotent)."""
+        try:
+            self._dropin.unlink()
+        except FileNotFoundError:
+            pass
+
+    def state(self) -> "FrontDoorState":
+        from rawos.kernel.arch.base import FrontDoorState
+        if not self._dropin.exists():
+            return FrontDoorState(
+                installed=False, entry_command=None, config_path=None
+            )
+        content = self._dropin.read_text()
+        entry_command = self._parse_force_command(content)
+        return FrontDoorState(
+            installed=True,
+            entry_command=entry_command,
+            config_path=str(self._dropin),
+        )
+
+    def validate(self) -> bool:
+        """Return True if `sshd -t` exits 0 (config is syntactically valid)."""
+        try:
+            r = subprocess.run(
+                ["sshd", "-t"],
+                capture_output=True, text=True, timeout=5.0,
+            )
+        except Exception:
+            return False
+        return r.returncode == 0
+
+    def reload(self) -> None:
+        """Signal sshd to reload its configuration via systemctl."""
+        subprocess.run(
+            ["systemctl", "reload", "ssh"],
+            capture_output=True, text=True, timeout=10.0,
+        )
+
+    def snapshot(self) -> str:
+        """Return an opaque restore token representing current drop-in state.
+
+        Token is either:
+        - "ABSENT" if no drop-in exists (restore will delete the drop-in), or
+        - the absolute path of a timestamped backup copy.
+        """
+        import shutil
+        import time
+        if not self._dropin.exists():
+            return self._ABSENT_SENTINEL
+        backup = self._dropin.with_suffix(f".bak.{int(time.time() * 1000)}")
+        shutil.copy2(str(self._dropin), str(backup))
+        return str(backup)
+
+    def restore(self, snapshot: str) -> None:
+        """Restore the drop-in to the state captured by snapshot().
+
+        If snapshot == "ABSENT", deletes the drop-in (restoring "no front-door").
+        Otherwise copies the backup back.
+        """
+        import shutil
+        from pathlib import Path
+        if snapshot == self._ABSENT_SENTINEL:
+            try:
+                self._dropin.unlink()
+            except FileNotFoundError:
+                pass
+        else:
+            shutil.copy2(snapshot, str(self._dropin))
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _parse_force_command(content: str) -> "str | None":
+        """Extract the ForceCommand value from a drop-in block, or None."""
+        for line in content.splitlines():
+            stripped = line.strip()
+            if stripped.lower().startswith("forcecommand"):
+                parts = stripped.split(None, 1)
+                if len(parts) == 2:
+                    return parts[1]
+        return None
