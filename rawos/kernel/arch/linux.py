@@ -100,6 +100,17 @@ class LinuxLogReader:
         return r.stdout.strip()
 
 
+class LinuxCrashReporter:
+    def recent_crashes(self, since: str) -> list[str]:
+        """Stub: server Linux has no desktop crash reporter context.
+
+        Core dumps at /var/crash/ exist but are process-level artifacts, not
+        managed by a platform crash reporter. Desktop anomaly detection for Linux
+        is deferred — not in scope for the server-focused arch layer.
+        """
+        return []
+
+
 class LinuxShellPolicy:
     def wrap(self, command: str, workdir: str) -> tuple[str, dict]:
         shell_cmd = (

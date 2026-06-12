@@ -61,3 +61,13 @@ class ShellPolicy(Protocol):
     def readonly_whitelist(self) -> ReadonlyWhitelist:
         """Return the arch-specific systemctl/journalctl read-only whitelist subsets."""
         ...
+
+
+class CrashReporter(Protocol):
+    def recent_crashes(self, since: str) -> list[str]:
+        """Return sorted unique process names that crashed since `since`.
+
+        `since` accepts "N minutes ago", "N hours ago", or ISO 8601 timestamp.
+        Returns [] on failure, permission error, or no desktop crash context.
+        """
+        ...

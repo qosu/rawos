@@ -151,6 +151,33 @@ class WindowsLogReader:
         return r.stdout.strip()
 
 
+class WindowsCrashReporter:
+    def recent_crashes(self, since: str) -> list[str]:
+        """Return unique provider names with Level=1 (Critical) Application events.
+
+        Level=1 = Critical in Windows Event Log — application crashes recorded by
+        Windows Error Reporting appear here. Level=2 (Error) is used by
+        WindowsLogReader.recent_errors(); Level=1 here is intentionally distinct.
+
+        EXPERIMENTAL: never live until a Windows host verifies it.
+        """
+        since_ps = _parse_relative_since_windows(since)
+        try:
+            r = subprocess.run(
+                ["powershell.exe", "-NonInteractive", "-Command",
+                 f"Get-WinEvent -FilterHashtable "
+                 f"@{{LogName='Application'; Level=1; StartTime={since_ps}}} "
+                 f"-ErrorAction SilentlyContinue | "
+                 f"Select-Object -ExpandProperty ProviderName"],
+                capture_output=True, text=True, timeout=10.0,
+            )
+        except Exception:
+            return []
+        if r.returncode != 0:
+            return []
+        return [line.strip() for line in r.stdout.strip().splitlines() if line.strip()]
+
+
 class WindowsShellPolicy:
     def wrap(self, command: str, workdir: str) -> tuple[str, dict]:
         """PowerShell via cmd.exe passthrough. No ulimit (Job Objects not implemented).

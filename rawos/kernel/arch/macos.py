@@ -17,8 +17,12 @@ from __future__ import annotations
 import re
 import shutil
 import subprocess
+from datetime import datetime, timedelta
+from pathlib import Path
 
 from rawos.kernel.arch.base import ReadonlyWhitelist
+
+_DIAGNOSTIC_REPORTS_DIR = Path("/Library/Logs/DiagnosticReports")
 
 _RELATIVE_MINUTE_RE = re.compile(r"^(\d+)\s+minute", re.IGNORECASE)
 _RELATIVE_HOUR_RE = re.compile(r"^(\d+)\s+hour", re.IGNORECASE)
@@ -157,6 +161,53 @@ class MacOSLogReader:
         if r.returncode != 0:
             return ""
         return r.stdout.strip()
+
+
+def _parse_since_to_datetime(since: str) -> datetime | None:
+    """Convert 'N minutes ago' / 'N hours ago' / ISO 8601 → datetime.
+
+    Used by MacOSCrashReporter to compare against file mtime. Returns None
+    if `since` cannot be parsed — caller should return [] in that case.
+    """
+    m = _RELATIVE_MINUTE_RE.match(since)
+    if m:
+        return datetime.now() - timedelta(minutes=int(m.group(1)))
+    m = _RELATIVE_HOUR_RE.match(since)
+    if m:
+        return datetime.now() - timedelta(hours=int(m.group(1)))
+    try:
+        return datetime.fromisoformat(since)
+    except ValueError:
+        return None
+
+
+class MacOSCrashReporter:
+    def recent_crashes(self, since: str) -> list[str]:
+        """Return sorted unique process names with crash reports newer than `since`.
+
+        Scans /Library/Logs/DiagnosticReports for .crash and .ips files whose
+        mtime is after the parsed `since` datetime. Process name is the filename
+        stem split on '_', index 0 (macOS format: {name}_{date}_{host}.crash).
+        Returns [] on OSError (e.g. permission denied) or unparseable `since`.
+        """
+        since_dt = _parse_since_to_datetime(since)
+        if since_dt is None:
+            return []
+        try:
+            names: set[str] = set()
+            for entry in _DIAGNOSTIC_REPORTS_DIR.iterdir():
+                if entry.suffix not in (".crash", ".ips"):
+                    continue
+                try:
+                    mtime = datetime.fromtimestamp(entry.stat().st_mtime)
+                except OSError:
+                    continue
+                if mtime < since_dt:
+                    continue
+                names.add(entry.name.split("_")[0])
+            return sorted(names)
+        except OSError:
+            return []
 
 
 class MacOSShellPolicy:
