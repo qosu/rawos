@@ -129,6 +129,10 @@ SELF_PROBE_INTERVAL_S = 21600  # 6 hours
 RAWOS_ENTITY_USER_ID    = "6eb6de1d-f5c9-4ae5-9aac-ce095b674823"
 RAWOS_ENTITY_PROJECT_ID = "51c880d3-3576-4aca-8616-74cb51a6f727"
 
+# Path to rawos own source repo — self-probe cycles create isolated worktrees of this.
+# Tests override this via monkeypatch to avoid touching the live /root/rawos tree.
+_SELF_PROBE_RAWOS_REPO = "/root/rawos"
+
 # Semantic trigger thresholds
 _STUCK_MIN_EDITS    = 5     # edits to same file within window → STUCK
 _STUCK_WINDOW_S     = 1800  # 30-minute window
@@ -608,6 +612,27 @@ _CODE_FIX_SYSTEM_PROMPT = (
     "Start with the very first line of the corrected file. "
     "Make the minimum correct change to resolve the issue."
 )
+
+_SELF_PROBE_SYSTEM_PROMPT = (
+    "You are rawos, running a SELF-IMPROVEMENT cycle against your own source tree.\n"
+    "Your workdir is a DISPOSABLE, ISOLATED git worktree of /root/rawos — never the\n"
+    "live working tree. TIER enforcement is active: writes outside the TIER 1\n"
+    "allowlist (tests/, rawos/evaluation/, rawos/dataset/, rawos/study/,\n"
+    "rawos/timing/, rawos/manifester/, docs/) are automatically reverted.\n\n"
+    "MISSION: Inspect the test suite or TIER 1 documentation and make EXACTLY ONE\n"
+    "concrete improvement. Prefer adding a missing test case in tests/.\n\n"
+    "RULES:\n"
+    "- Write to TIER 1 paths only (tests/, docs/, rawos/study/, etc.).\n"
+    "- Use git_branch to create a rawos/self-improve-[description] branch.\n"
+    "- Use git_commit with format:\n"
+    "    rawos: [description]\n\n"
+    "    Self-probe: [what was added/improved]\n"
+    "    Confidence: 0.X\n"
+    "- Do NOT restart rawos.service. Do NOT merge. Do NOT write to TIER 0 paths.\n"
+    "- If nothing concrete to improve: use bash_readonly to log and stop.\n"
+    "- Begin response with CONTRIBUTE (making a commit) or SILENCE (nothing found).\n"
+)
+
 
 
 async def _generate_code_fix(
@@ -1803,11 +1828,112 @@ async def rawos_self_probe_loop() -> None:
 
 
 async def _run_self_probe_cycle() -> None:
-    """Not yet implemented — the self-probe loop ships dormant (Pass 2 step d).
+    """Phase 16 — self-probe worktree cycle.
 
-    When settings.self_probe_enabled is enabled, this must operate on an
-    isolated `git worktree add /root/rawos-self-probe-worktree <branch>`
-    (workdir = the worktree path, never /root/rawos), and leave its results
-    on a rawos/self-improve-* branch for human review.
+    Creates an isolated git worktree of _SELF_PROBE_RAWOS_REPO on a fresh
+    rawos/self-improve-<timestamp> branch, runs the rawos agent loop inside
+    it (TIER enforcement active), and leaves results on the branch for human
+    review.  Cleans up the worktree on exit whether or not the agent
+    succeeded.
+
+    Invariants (never violated):
+    - workdir passed to agent_loop is always the worktree path, never
+      _SELF_PROBE_RAWOS_REPO.
+    - Branch name always matches rawos/self-improve-<timestamp>.
+    - No auto-merge, no auto-restart of rawos.service.
+    - Origin HEAD (master) is not moved by this cycle.
     """
-    raise NotImplementedError("self-probe worktree cycle not yet implemented (Pass 2 step d)")
+    import time as _time
+
+    timestamp   = int(_time.time())
+    branch_name = f"rawos/self-improve-{timestamp}"
+
+    worktree_path = await create_worktree(_SELF_PROBE_RAWOS_REPO)
+    if not worktree_path:
+        log.error(
+            "self-probe: worktree creation failed for %s — aborting cycle",
+            _SELF_PROBE_RAWOS_REPO,
+        )
+        return
+
+    try:
+        # create_worktree leaves a detached HEAD; name it before the agent runs.
+        br = await run_bash(f"git checkout -b '{branch_name}'", worktree_path)
+        if br.exit_code != 0:
+            log.error(
+                "self-probe: git checkout -b %s failed: %s",
+                branch_name, br.stderr[:300],
+            )
+            return
+
+        log.info(
+            "self-probe: cycle start — worktree=%s branch=%s",
+            worktree_path, branch_name,
+        )
+
+        goal = (
+            "Inspect the rawos test suite and add EXACTLY ONE missing test case "
+            "for an uncovered edge case in tests/. Follow existing test patterns. "
+            "Commit to the current branch. Do not modify files outside tests/."
+        )
+
+        # Minimal DB records for billing attribution and audit trail.
+        intent_rec = Intent(
+            user_id=RAWOS_ENTITY_USER_ID,
+            project_id=RAWOS_ENTITY_PROJECT_ID,
+            raw_text=goal,
+            status=IntentStatus.EXECUTING,
+        )
+        db.create_intent(intent_rec)
+        agent_rec = Agent(
+            user_id=RAWOS_ENTITY_USER_ID,
+            project_id=RAWOS_ENTITY_PROJECT_ID,
+            goal=f"[self-probe] {goal[:180]}",
+            model=settings.deepseek_model_pro,
+        )
+        agent_rec = agent_rec.transition(AgentStatus.ACTIVE)
+        db.create_agent(agent_rec)
+
+        messages = [{"role": "user", "content": goal}]
+
+        async def _drain() -> None:
+            async for event in agent_loop.run(
+                messages=messages,
+                workdir=worktree_path,
+                model=settings.deepseek_model_pro,
+                intent_id=intent_rec.id,
+                user_id=RAWOS_ENTITY_USER_ID,
+                system_prompt=_SELF_PROBE_SYSTEM_PROMPT,
+                tool_definitions=_get_tools_for_server_scan(),
+                agent_id=agent_rec.id,
+                event_type="self_probe",
+            ):
+                if event.get("type") == "error":
+                    log.error("self-probe agent error: %s", event.get("message"))
+
+        try:
+            await asyncio.wait_for(_drain(), timeout=MAX_PROACTIVE_LOOP_TIME_S)
+            db.update_intent(
+                RAWOS_ENTITY_USER_ID, intent_rec.id, status=IntentStatus.COMPLETED
+            )
+        except asyncio.TimeoutError:
+            log.warning(
+                "self-probe: agent timed out after %ds", MAX_PROACTIVE_LOOP_TIME_S
+            )
+            db.update_intent(
+                RAWOS_ENTITY_USER_ID, intent_rec.id, status=IntentStatus.FAILED
+            )
+        except Exception:
+            log.exception("self-probe: agent loop error")
+            db.update_intent(
+                RAWOS_ENTITY_USER_ID, intent_rec.id, status=IntentStatus.FAILED
+            )
+
+        log.info(
+            "self-probe: cycle complete — branch=%s available for human review",
+            branch_name,
+        )
+
+    finally:
+        await remove_worktree(worktree_path)
+        log.info("self-probe: worktree cleaned up — %s", worktree_path)
