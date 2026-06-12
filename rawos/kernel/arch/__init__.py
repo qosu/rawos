@@ -20,6 +20,12 @@ from rawos.kernel.arch.linux import (
     LinuxServiceManager,
     LinuxShellPolicy,
 )
+from rawos.kernel.arch.macos import (
+    MacOSLogReader,
+    MacOSResourceProbe,
+    MacOSServiceManager,
+    MacOSShellPolicy,
+)
 
 
 @dataclass(frozen=True)
@@ -40,7 +46,12 @@ def _build_backend(os_: OS) -> Backend:
             shell_policy=LinuxShellPolicy(),
         )
     if os_ == OS.MACOS:
-        raise NotImplementedError("macOS arch backend not yet implemented (Stage B)")
+        return Backend(
+            resource_probe=MacOSResourceProbe(),
+            service_manager=MacOSServiceManager(),
+            log_reader=MacOSLogReader(),
+            shell_policy=MacOSShellPolicy(),
+        )
     raise NotImplementedError("Windows arch backend not yet implemented (Stage C)")
 
 
