@@ -22,6 +22,7 @@ import logging
 from dataclasses import dataclass
 from typing import Awaitable, Callable
 
+from rawos.kernel.arch import get_arch
 from rawos.kernel.sandbox import SandboxError, run_bash
 from rawos.kernel.tools import _is_rawos_source_tree
 
@@ -60,6 +61,13 @@ async def reversible_apply(
     health_check stays False for timeout_s), `repo_root` is reset back to
     its pre-apply HEAD and `service_name` is restarted again.
     """
+    arch = get_arch()
+    if not arch.service_manager.supports_reversible_apply:
+        raise ReversibleApplyError(
+            f"arch backend does not support reversible_apply "
+            f"(supports_reversible_apply=False): {type(arch.service_manager).__name__}"
+        )
+
     if await _is_rawos_source_tree(repo_root):
         raise ReversibleApplyError(
             f"refusing to reversible_apply against rawos's own source tree: {repo_root}"
@@ -86,17 +94,14 @@ async def reversible_apply(
     after = await run_bash("git rev-parse HEAD", repo_root)
     after_sha = after.stdout.strip()
 
-    try:
-        restart = await run_bash(f"systemctl restart {service_name}", repo_root)
-    except SandboxError as exc:
-        await _rollback(repo_root, service_name, before_sha)
+    loop = asyncio.get_running_loop()
+    restart_ok = await loop.run_in_executor(
+        None, arch.service_manager.restart, service_name,
+    )
+    if not restart_ok:
+        await _rollback(repo_root, service_name, before_sha, arch)
         return ApplyResult(True, False, True, before_sha, after_sha,
-                            f"systemctl restart {service_name} raised: {exc}")
-    if restart.exit_code != 0:
-        await _rollback(repo_root, service_name, before_sha)
-        return ApplyResult(True, False, True, before_sha, after_sha,
-                            f"systemctl restart {service_name} failed: "
-                            f"{(restart.stderr or restart.stdout).strip()}")
+                            f"systemctl restart {service_name} failed")
 
     elapsed = 0.0
     while elapsed < timeout_s:
@@ -112,13 +117,16 @@ async def reversible_apply(
                                 f"applied {fix_branch} ({before_sha[:8]} -> {after_sha[:8]}), "
                                 f"{service_name} healthy after {elapsed:.0f}s")
 
-    await _rollback(repo_root, service_name, before_sha)
+    await _rollback(repo_root, service_name, before_sha, arch)
     return ApplyResult(True, False, True, before_sha, after_sha,
                         f"applied {fix_branch} ({before_sha[:8]} -> {after_sha[:8]}) but "
                         f"{service_name} not healthy within {timeout_s}s — rolled back to {before_sha[:8]}")
 
 
-async def _rollback(repo_root: str, service_name: str, before_sha: str) -> None:
+async def _rollback(repo_root: str, service_name: str, before_sha: str, arch=None) -> None:
+    if arch is None:
+        arch = get_arch()
+
     try:
         reset = await run_bash(f"git reset --hard {before_sha}", repo_root)
         if reset.exit_code != 0:
@@ -127,10 +135,12 @@ async def _rollback(repo_root: str, service_name: str, before_sha: str) -> None:
     except SandboxError:
         log.exception("reversible_apply: rollback git reset --hard raised in %s", repo_root)
 
+    loop = asyncio.get_running_loop()
     try:
-        restart = await run_bash(f"systemctl restart {service_name}", repo_root)
-        if restart.exit_code != 0:
-            log.error("reversible_apply: rollback systemctl restart %s failed: %s",
-                       service_name, restart.stderr.strip())
-    except SandboxError:
+        restart_ok = await loop.run_in_executor(
+            None, arch.service_manager.restart, service_name,
+        )
+        if not restart_ok:
+            log.error("reversible_apply: rollback systemctl restart %s failed", service_name)
+    except Exception:
         log.exception("reversible_apply: rollback systemctl restart %s raised", service_name)
