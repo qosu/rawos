@@ -18,6 +18,7 @@ from pathlib import Path
 
 import rawos.db as db
 from rawos.config import settings
+from rawos.context.user_model import get_user_model
 from rawos.kernel import memory_index
 
 log = logging.getLogger("rawos.context_builder")
@@ -92,4 +93,70 @@ def build_context(
             + "\n</project_memory>"
         )
 
+    continuity_block = _build_continuity_block(user_id)
+    if continuity_block:
+        system_addition = continuity_block + system_addition
+
     return messages, system_addition
+
+
+def _build_continuity_block(user_id: str) -> str:
+    """
+    Cross-project continuity: the being's one continuous life, regardless of
+    which project the current turn is scoped to.
+
+    Best-effort — any failure or absent user_model yields "" so callers
+    (and existing tests asserting system_addition == "") are unaffected.
+    """
+    try:
+        model = get_user_model(user_id)
+        if not model:
+            return ""
+
+        lines: list[str] = []
+
+        goal = model.get("inferred_goal")
+        if goal:
+            confidence = model.get("goal_confidence") or 0.0
+            domain = model.get("goal_domain")
+            domain_part = f" (domain: {domain})" if domain else ""
+            lines.append(f"Current goal: {goal}{domain_part} [confidence: {confidence:.0%}]")
+
+        active_domains = model.get("active_domains") or []
+        if active_domains:
+            lines.append(f"Active domains: {', '.join(active_domains)}")
+
+        recent_activity = model.get("recent_activity") or []
+        if recent_activity:
+            previews = []
+            for entry in recent_activity[:5]:
+                preview = entry.get("preview") or entry.get("file") or entry.get("name")
+                if preview:
+                    previews.append(f"- {preview}")
+            if previews:
+                lines.append("Recent activity:\n" + "\n".join(previews))
+
+        episodic_history = model.get("episodic_history") or []
+        if episodic_history:
+            actions = []
+            for entry in episodic_history[:3]:
+                summary = entry.get("action_summary")
+                outcome = entry.get("outcome")
+                if summary:
+                    suffix = f" -> {outcome}" if outcome else ""
+                    actions.append(f"- {summary}{suffix}")
+            if actions:
+                lines.append("Recent proactive work:\n" + "\n".join(actions))
+
+        if not lines:
+            return ""
+
+        return (
+            "\n\n<continuity>\n"
+            "Cross-project context — the through-line of this being's life:\n\n"
+            + "\n".join(lines)
+            + "\n</continuity>"
+        )
+    except Exception as e:
+        log.debug("continuity context retrieval skipped: %s", e)
+        return ""

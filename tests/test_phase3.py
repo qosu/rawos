@@ -151,6 +151,30 @@ class TestContextBuilder:
         for m in messages:
             assert m["role"] in ("user", "assistant")
 
+    def test_build_context_omits_continuity_when_no_user_model(self):
+        from rawos.kernel.context_builder import build_context
+        _, sys_ctx = build_context(self.user.id, self.project.id, "test")
+        assert "<continuity>" not in sys_ctx
+        assert sys_ctx == ""
+
+    def test_build_context_injects_continuity_when_user_model_present(self):
+        import json
+        import rawos.db as db
+        with db._conn() as conn:
+            conn.execute(
+                """INSERT INTO user_model
+                   (user_id, inferred_goal, goal_confidence, goal_domain, active_domains, recent_activity)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (self.user.id, "Ship the checkout flow", 0.82, "feature",
+                 json.dumps(["feature", "api"]), json.dumps([])),
+            )
+        from rawos.kernel.context_builder import build_context
+        _, sys_ctx = build_context(self.user.id, self.project.id, "test")
+        assert "<continuity>" in sys_ctx
+        assert "Ship the checkout flow" in sys_ctx
+        if "<project_memory>" in sys_ctx:
+            assert sys_ctx.index("<continuity>") < sys_ctx.index("<project_memory>")
+
 
 # ---------------------------------------------------------------------------
 # Summariser
