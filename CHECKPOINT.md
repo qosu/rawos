@@ -1,9 +1,12 @@
 # rawos CHECKPOINT
-Updated: 2026-06-09 19:12 UTC
+Updated: 2026-06-12 (Phase 0 consolidation)
 
 ## Current State
-Phase 13 (The Inversion) COMPLETE. Full system audit done. 9 bugs fixed total.
+Phase 13 (The Inversion) COMPLETE + MERGED. Stage G+H fast-forward merged into master 2026-06-12.
+Phase 16 (Self-Modification) code COMPLETE, DORMANT (self_probe_enabled=False).
+Master == production. Branch hygiene: 29 rawos/* branches deleted (all merged), 5 stage-* remain.
 rawos v0.6.0, port 8002, active. DB integrity: ok.
+
 
 ## Bugs Fixed This Session (quality audit 2026-06-09)
 

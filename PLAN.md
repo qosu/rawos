@@ -18,6 +18,33 @@ This is not a product feature. It is a claim about what AI can become.
 
 ## Completed phases
 
+### Phase 13 — The Inversion: login = being (DONE — 2026-06-12, Stages A–H)
+
+**Thesis**: stack inversion. hardware → host kernel → rawos → HUMAN. `ssh root@server` lands in AI, not bash. The AI is the first entity you meet on the machine.
+
+**What was built** (Stages A–H, commits 7598a220–8346c7c1, live on Hetzner 178.104.255.197):
+
+- `FrontDoor` Protocol in `rawos/kernel/arch/base.py` — OS-agnostic ABI:
+  install / uninstall / state / validate / reload / snapshot / restore.
+- `LinuxFrontDoor` backend in `rawos/kernel/arch/linux.py` — sshd drop-in
+  `/etc/ssh/sshd_config.d/50-rawos-frontdoor.conf` (`Match User root / ForceCommand rawos frontdoor enter`).
+  Validates via `sshd -t` before reload; snapshot/restore + dead-man's-switch installer.
+- `decide_entry()` pure function in `rawos/kernel/frontdoor.py` —
+  LAUNCH_CHAT / PASSTHROUGH / FAIL_OPEN_SHELL. Fail-open: rawos down or no token →
+  raw shell + notice. JSON audit per session at `~/.rawos/audit/frontdoor.log`.
+- `rawos frontdoor enter/install/commit/status/uninstall` CLI (rawos/cli/main.py).
+- Session digest 'while you were away' — Stage G, rawos/scheduler/proactive.py.
+- SFTP passthrough bug fixed via TDD: SSH_ORIGINAL_COMMAND='subsystem sftp' →
+  direct execv(sftp-server), not bash -c.
+- 9 bugs fixed total; full suite 542 tests pass.
+- macOS/Windows stubs: NotImplementedError — seam exists, not built.
+
+**Security invariants (permanent):** escape hatch (`ssh -t root@host bash` → PASSTHROUGH);
+fail-open on rawos-down; dead-man's-switch on install; tooling-safe (scp/rsync/git pass through).
+
+**Current status:** live + active on master (fast-forward merged 2026-06-12 from stage-h-front-door).
+
+
 ### Phase 14 — The Accountable Agent (DONE)
 
 **Thesis**: rawos cannot be trusted to CONTRIBUTE if it does not hold itself accountable for outcomes.
