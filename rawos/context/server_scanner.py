@@ -11,6 +11,8 @@ import subprocess
 import time
 from dataclasses import dataclass, field
 
+from rawos.kernel.arch import get_arch
+
 # Map known service names to their source repos (for workdir resolution)
 _SERVICE_TO_REPO: dict[str, str] = {
     "exocortex":          "/root/exocortex",
@@ -176,13 +178,8 @@ def _check_resources() -> list[ServerAnomaly]:
     """Detect disk pressure. Severity 9 (≥90%) or 6 (≥85%)."""
     anomalies = []
     try:
-        r = subprocess.run(
-            ["df", "/", "--output=pcent"],
-            capture_output=True, text=True, timeout=3.0,
-        )
-        if r.returncode == 0:
-            pct_str = r.stdout.strip().splitlines()[-1].strip().rstrip("%")
-            pct = int(pct_str)
+        pct = get_arch().resource_probe.disk_percent("/")
+        if pct is not None:
             if pct >= 90:
                 anomalies.append(ServerAnomaly(
                     kind="disk_critical",

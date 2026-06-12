@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     port: int   = 8002
     debug: bool = False
 
+    # Arch backend layer (kernel/arch) — overrides host OS detection for tests
+    arch_override: str | None = None
+
     # Database
     db_path: str = "/root/rawos/data/rawos.db"
 
