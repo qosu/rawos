@@ -1,7 +1,8 @@
-CHANGED: rawos/kernel/arch/base.py + rawos/kernel/arch/linux.py (ServiceManager Protocol + LinuxServiceManager generate/install/uninstall_unit)
-CHANGED: rawos/kernel/arch/linux.py + rawos/installer/setup.py (SetupWizard)
-CHANGED: rawos/cli/main.py (+rawos service CLI group, +rawos setup command)
-CHANGED: tests/test_arch_linux_service_manager.py (25 tests), test_cli_service.py (10), test_setup_wizard.py (12), test_tier1_remaining_prefixes.py (3, from rawos self-probe)
-CHANGED: pyproject.toml (+python-telegram-bot>=22.8, +openai>=2.41)
-WHY: Milestone 5 (Installable substrate) — rawos is now self-installable on any Linux host via `rawos setup` + `rawos service install`. 685 tests pass. Repo cleaned: 252 self-improve branches pruned (4 archived), 67 leaked worktrees removed.
-NEXT: Phase 0 consolidation complete. Next: Phase 1 Step A cage hardening (escape-vector tests: symlink, rename-into-TIER0, path traversal, absolute-path, hardlink).
+CHANGED: All 5 milestones confirmed COMPLETE on 2026-06-12
+  M1(Phase13) Inversion — live; M2(Phase14+15) Agent+Intent — done; M3(Phase16) Self-mod — done
+  M4(Phase17) Telegram front-door — 16 tests, TelegramGate+lifespan wired, .env populated
+  M5(Phase18) Installable substrate — done (685 tests, 40/40 escape-vector, rawos setup CLI)
+CHANGED: Self-probe: 15 empty branches pruned (rawos generates clean branches, no drift)
+WHY: Phase 0–18 arc complete. rawos IS the OS: inversion live, self-modification active,
+  Telegram window open, installable on any Linux host. 685 tests green.
+NEXT: Phase 19 TBD — strategic inflection. All prior milestones complete.
