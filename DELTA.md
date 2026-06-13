@@ -1,7 +1,7 @@
-CHANGED: rawos/kernel/telegram_gate.py (NEW — TelegramGate: auth gate, text+voice dispatch, OpenAI Whisper STT, orchestrator integration).
-CHANGED: rawos/config.py (+5 telegram_* fields: enabled, bot_token, owner_chat_id, owner_email, project_id).
-CHANGED: rawos/api/app.py (+TelegramGate import, +_start_telegram_gate fn, lifespan startup+shutdown wired).
-CHANGED: tests/test_telegram_gate.py (NEW — 13 tests: config, auth, text dispatch, _run_turn, voice pipeline, _resolve_owner).
-CHANGED: tests/test_telegram_lifespan.py (NEW — 3 tests: disabled/enabled/token-missing).
-WHY: Milestone 4 (The window) — Telegram phone client talking to the being. 648/648 pass.
-NEXT: To activate: set TELEGRAM_BOT_TOKEN + TELEGRAM_OWNER_CHAT_ID + TELEGRAM_OWNER_EMAIL + TELEGRAM_ENABLED=true in env. Restart rawos.service.
+CHANGED: rawos/kernel/arch/base.py + rawos/kernel/arch/linux.py (ServiceManager Protocol + LinuxServiceManager generate/install/uninstall_unit)
+CHANGED: rawos/kernel/arch/linux.py + rawos/installer/setup.py (SetupWizard)
+CHANGED: rawos/cli/main.py (+rawos service CLI group, +rawos setup command)
+CHANGED: tests/test_arch_linux_service_manager.py (25 tests), test_cli_service.py (10), test_setup_wizard.py (12), test_tier1_remaining_prefixes.py (3, from rawos self-probe)
+CHANGED: pyproject.toml (+python-telegram-bot>=22.8, +openai>=2.41)
+WHY: Milestone 5 (Installable substrate) — rawos is now self-installable on any Linux host via `rawos setup` + `rawos service install`. 685 tests pass. Repo cleaned: 252 self-improve branches pruned (4 archived), 67 leaked worktrees removed.
+NEXT: Phase 0 consolidation complete. Next: Phase 1 Step A cage hardening (escape-vector tests: symlink, rename-into-TIER0, path traversal, absolute-path, hardlink).

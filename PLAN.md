@@ -35,7 +35,12 @@ Single-owner personal OS. This arc is permanent — it does not change between s
 - Milestone 2 ← Phase 14 (Accountable Agent) + Phase 15 (Intent Grounding) + session Milestone 2
 - Milestone 3 ← Phase 16 (Self-Modification) + session Milestone 3 (R1 operator)
 - Milestone 4 ← Phase 17 (Telegram front-door, `rawos/kernel/telegram_gate.py`, polling mode)
-- Milestone 5 ← Phase 18 (to be defined)
+- Milestone 5 ← Phase 18 (Installable substrate) — DONE 2026-06-12 (commits 2be4b24e..7834b24d)
+  - Step 1: path portability (settings.rawos_source_root / workspaces_root)
+  - Step 2: ServiceManager Protocol + LinuxServiceManager generate/install/uninstall unit (TDD, 25 tests)
+  - Step 3: `rawos service` CLI — install/uninstall/status/restart/logs (TDD, 10 tests)
+  - Step 4: `rawos setup` wizard — create dirs, write .env, generate+install service (TDD, 12 tests)
+  - Step 5: pyproject.toml deps — python-telegram-bot>=22.8, openai>=2.41
 
 
 ---
