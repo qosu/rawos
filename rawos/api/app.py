@@ -59,6 +59,10 @@ async def lifespan(app: FastAPI):
     from rawos.context.collector import start_filesystem_watcher, stop_filesystem_watcher, db_sync_loop
     start_filesystem_watcher()
 
+    # Phase 20 — being's real-time system perception (dormant until system_perception_enabled=True)
+    from rawos.context.system_perception import start_system_perception, stop_system_perception
+    start_system_perception()
+
     # Start background tasks
     db_sync_task       = asyncio.create_task(db_sync_loop(interval_s=30.0),       name="context-db-sync")
     proactive_task     = asyncio.create_task(_start_proactive_scheduler(),         name="proactive-scheduler")
@@ -68,6 +72,8 @@ async def lifespan(app: FastAPI):
     autonomous_task    = asyncio.create_task(_start_autonomous_scan(),             name="autonomous-server-scan")
     self_probe_task    = asyncio.create_task(_start_self_probe_loop(),             name="rawos-self-probe")
     narrative_task     = asyncio.create_task(_start_narrative_consolidation_loop(), name="narrative-consolidation")
+    operator_scan_task       = asyncio.create_task(_start_operator_scan_loop(),          name="operator-scan")
+    system_fs_reflex_task = asyncio.create_task(_start_system_fs_reflex(),              name="system-fs-reflex")
     _telegram_gate     = await _start_telegram_gate()
 
     # Clean up intents orphaned by crash/restart — any still 'executing' after
@@ -94,7 +100,10 @@ async def lifespan(app: FastAPI):
     autonomous_task.cancel()
     self_probe_task.cancel()
     narrative_task.cancel()
-    await asyncio.gather(db_sync_task, proactive_task, watcher_task, snapshot_task, calendar_task, autonomous_task, self_probe_task, narrative_task, return_exceptions=True)
+    operator_scan_task.cancel()
+    system_fs_reflex_task.cancel()
+    await asyncio.gather(db_sync_task, proactive_task, watcher_task, snapshot_task, calendar_task, autonomous_task, self_probe_task, narrative_task, operator_scan_task, system_fs_reflex_task, return_exceptions=True)
+    stop_system_perception()
     stop_filesystem_watcher()
     _log.info("rawos shutdown complete")
 
@@ -112,6 +121,11 @@ async def _start_proactive_scheduler() -> None:
     await proactive_scan_loop()
 
 
+async def _start_system_fs_reflex() -> None:
+    from rawos.scheduler.system_reflex import system_fs_reflex_loop
+    await system_fs_reflex_loop()
+
+
 async def _start_autonomous_scan() -> None:
     from rawos.scheduler.proactive import autonomous_server_scan_loop
     await autonomous_server_scan_loop()
@@ -125,6 +139,11 @@ async def _start_self_probe_loop() -> None:
 async def _start_narrative_consolidation_loop() -> None:
     from rawos.scheduler.proactive import rawos_narrative_consolidation_loop
     await rawos_narrative_consolidation_loop()
+
+
+async def _start_operator_scan_loop() -> None:
+    from rawos.scheduler.proactive import rawos_operator_scan_loop
+    await rawos_operator_scan_loop()
 
 
 async def _personal_watcher_reload_loop() -> None:

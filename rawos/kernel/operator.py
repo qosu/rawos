@@ -31,6 +31,35 @@ class OperatorError(Exception):
     """Raised when an operator path refuses to run (safety precondition failed)."""
 
 
+@dataclass(frozen=True)
+class ValidatorResult:
+    passed: bool
+    output: str
+
+
+def run_validator(validator_cmd: str) -> ValidatorResult:
+    """Run a target's validator command — the unfakeable health oracle.
+
+    Returns passed=True with empty output on success (returncode 0).
+    On failure (non-zero exit or timeout) returns passed=False with the
+    captured stdout+stderr (or a timeout note) for diagnosis.
+    """
+    try:
+        result = subprocess.run(
+            validator_cmd, shell=True,
+            capture_output=True, timeout=VALIDATOR_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired:
+        log.warning("run_validator: validator timed out: %s", validator_cmd)
+        return ValidatorResult(passed=False, output="validator timed out")
+
+    if result.returncode == 0:
+        return ValidatorResult(passed=True, output="")
+
+    output = (result.stdout + result.stderr).decode(errors="replace")
+    return ValidatorResult(passed=False, output=output)
+
+
 class ReversibleOperation(Protocol):
     """capture() -> Snapshot, apply(), verify() -> bool, restore(Snapshot).
 
@@ -119,15 +148,7 @@ class ReversibleFileEdit:
         self._operator.write(self.target_path, self._new_content)
 
     def verify(self) -> bool:
-        try:
-            result = subprocess.run(
-                self._validator_cmd, shell=True,
-                capture_output=True, timeout=VALIDATOR_TIMEOUT_S,
-            )
-        except subprocess.TimeoutExpired:
-            log.warning("ReversibleFileEdit.verify: validator timed out: %s", self._validator_cmd)
-            return False
-        return result.returncode == 0
+        return run_validator(self._validator_cmd).passed
 
     def restore(self, snapshot: FileSnapshot) -> None:
         self._operator.restore(snapshot)

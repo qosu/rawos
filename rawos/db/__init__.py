@@ -856,6 +856,18 @@ def get_managed_file_target(user_id: str, target_path: str) -> dict | None:
     return dict(row) if row else None
 
 
+def list_managed_file_targets(user_id: str) -> list[dict]:
+    """Return all allowlisted (target_path, validator_cmd) rows for user_id."""
+    with _conn() as conn:
+        rows = conn.execute(
+            """SELECT target_path, validator_cmd, created_at
+               FROM managed_file_targets
+               WHERE user_id = ?""",
+            (user_id,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
 def add_managed_file_target(user_id: str, target_path: str, validator_cmd: str) -> None:
     """Register (target_path, validator_cmd) as an owner-allowlisted target.
 

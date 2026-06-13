@@ -57,6 +57,23 @@ class TestManagedFileTargetsDB:
         db.add_managed_file_target(self.user.id, "/etc/target.conf", "true")
         assert db.get_managed_file_target(other_user.id, "/etc/target.conf") is None
 
+    def test_list_returns_empty_for_user_with_no_targets(self):
+        assert db.list_managed_file_targets(self.user.id) == []
+
+    def test_list_returns_only_this_user_rows(self):
+        other_user = db.create_user(User(
+            email=f"lister-{id(self)}@test.com",
+            password_hash=hashlib.sha256(b"pass3").hexdigest(),
+        ))
+        db.add_managed_file_target(self.user.id, "/etc/a.conf", "validate-a")
+        db.add_managed_file_target(self.user.id, "/etc/b.conf", "validate-b")
+        db.add_managed_file_target(other_user.id, "/etc/c.conf", "validate-c")
+
+        rows = db.list_managed_file_targets(self.user.id)
+
+        assert {r["target_path"] for r in rows} == {"/etc/a.conf", "/etc/b.conf"}
+        assert {r["validator_cmd"] for r in rows} == {"validate-a", "validate-b"}
+
 
 def test_operator_enabled_defaults_false():
     from rawos.config import settings

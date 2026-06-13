@@ -28,6 +28,9 @@ from rawos.kernel.arch import get_arch
 from rawos.kernel.sandbox import run_bash
 from rawos.kernel import memory_index
 from rawos.kernel.self_narrative import write_self_narrative
+from rawos.kernel import summarizer
+from rawos.kernel.operator import operate_on_file, run_validator
+from rawos.kernel.arch.base import FileOperatorRefusalError
 from rawos.context.server_scanner import ServerAnomaly
 from rawos.config import settings
 from rawos.inference.intent_engine import InferredIntent, infer_intent
@@ -123,6 +126,11 @@ VERIFICATION_TIMEOUT_S = 300
 AUTONOMOUS_SCAN_THRESHOLD   = 6     # minimum severity to act (1-10 scale)
 AUTO_APPLY_MAX_DIFF_LINES   = 50    # Stage 3 graduated auto-apply: max total diff lines
 AUTONOMOUS_SCAN_COOLDOWN_S  = 1800  # 30 min cooldown per anomaly type
+
+# Autonomous operator scan (Milestone 6) — per-target cooldown, mirrors
+# AUTONOMOUS_SCAN_COOLDOWN_S but keyed by trigger_type='OPERATOR_SCAN' and
+# target_path (not by user_id — the operator allowlist is single-owner).
+OPERATOR_SCAN_COOLDOWN_S = 1800  # 30 min cooldown per managed file target
 
 # Phase 16 self-modification probe — dormant until settings.self_probe_enabled
 SELF_PROBE_INTERVAL_S = 21600  # 6 hours
@@ -2064,4 +2072,210 @@ async def rawos_narrative_consolidation_loop() -> None:
     log.info("narrative_consolidation: loop started (interval=%ds)", interval)
     while True:
         await _run_narrative_consolidation_cycle()
+        await asyncio.sleep(interval)
+
+
+# ---------------------------------------------------------------------------
+# Milestone 6 — Autonomous Operator Loop
+#
+# Wires the proven kernel/operator.py::operate_on_file gate into the proactive
+# scheduler so the being autonomously detects config drift on its owner-
+# allowlisted managed_file_targets (via each target's validator command as an
+# unfakeable detection oracle) and proposes/applies reversible fixes.
+#
+# CRITICAL IDENTITY INVARIANT: unlike the git autonomous scan (which runs as
+# RAWOS_ENTITY_USER_ID), the operator allowlist (managed_file_targets) and its
+# graduation ledger (operator_track_record) are OWNER-keyed — the same owner
+# identity the chat manage_file path uses (db.get_user_by_email(
+# settings.telegram_owner_email)). This loop MUST run as owner.id. Empty
+# telegram_owner_email or no matching user row => no-op (cannot invent an
+# owner).
+# ---------------------------------------------------------------------------
+
+_CONFIG_FIX_SYSTEM_PROMPT = """You are rawos, an autonomous machine operator repairing a broken managed configuration file on the host you run on.
+
+You will be given the file's path, its current content, and the error output from the file's validator command (the command that proves the file is broken).
+
+Respond with ONLY the complete corrected file content — no explanation, no commentary, no markdown code fences. Make the minimal change needed to make the validator pass while preserving the file's existing structure, style, and intent."""
+
+
+async def _generate_config_fix(
+    target_path: str, current_content: bytes, validator_error: str,
+) -> bytes | None:
+    """Ask the LLM for a corrected version of a broken managed config file.
+
+    Mirrors _generate_code_fix's "never propose a no-op" discipline: returns
+    None (no proposal) when the LLM output is empty, identical to the current
+    content, or the LLM call itself fails. Never raises.
+    """
+    current_text = current_content.decode("utf-8", errors="replace")
+    user_text = (
+        f"File path: {target_path}\n\n"
+        f"Validator error output:\n{validator_error}\n\n"
+        f"Current file content:\n{current_text}"
+    )
+
+    try:
+        raw_result = await summarizer._complete(_CONFIG_FIX_SYSTEM_PROMPT, user_text)
+    except Exception:
+        log.exception("_generate_config_fix: LLM call failed for target=%s", target_path)
+        return None
+
+    corrected_text = _strip_code_fences(raw_result.strip())
+    if not corrected_text.strip():
+        log.debug("_generate_config_fix: empty LLM output — skipping target=%s", target_path)
+        return None
+
+    if corrected_text.strip() == current_text.strip():
+        log.debug("_generate_config_fix: LLM output identical to current — skipping target=%s", target_path)
+        return None
+
+    return corrected_text.encode("utf-8")
+
+
+def _is_operator_cooldown(target_path: str) -> bool:
+    """Check whether target_path was scanned by the operator loop recently.
+
+    Mirrors _is_autonomous_cooldown but keyed by trigger_type='OPERATOR_SCAN'
+    and domain=target_path (not by user_id — managed_file_targets is a
+    single-owner allowlist, so per-target is sufficient).
+    """
+    cutoff = int(time.time()) - OPERATOR_SCAN_COOLDOWN_S
+    with db._conn() as conn:
+        row = conn.execute(
+            """SELECT 1 FROM episodic_memory
+               WHERE trigger_type = 'OPERATOR_SCAN'
+               AND domain = ? AND ts >= ? LIMIT 1""",
+            (target_path, cutoff),
+        ).fetchone()
+    return row is not None
+
+
+def _route_operator_outcome(owner_id: str, target_path: str, outcome) -> None:
+    """Record an OperateOutcome from the autonomous operator scan.
+
+    The loop adds no gating logic of its own — operate_on_file already decided
+    auto-apply vs propose-only (and already performed capture/apply/verify/
+    rollback for the auto-apply case). This function only manifests the
+    decision as a proactive artifact + episodic record.
+
+    auto_applied -> decision='contribute' (the being acted on the machine).
+    proposed     -> decision='signal' (the being noticed drift and has a
+                     verified-shape fix, but is not yet allowed to apply it —
+                     the owner actions it via the existing chat manage_file
+                     path; a durable autonomous-approve store is deferred,
+                     stated as a known limitation, not faked here).
+    """
+    goal = f"repair managed file {target_path}"
+
+    if outcome.auto_applied:
+        result = outcome.operation_result
+        if result is not None and result.verified:
+            summary = f"auto-applied fix to {target_path} (validator passed)"
+        elif result is not None and result.restored:
+            summary = f"applied fix to {target_path} failed validation — rolled back to original"
+        else:
+            summary = f"auto-applied fix to {target_path}: {outcome.reason}"
+
+        _log_episodic(owner_id, "OPERATOR_SCAN", target_path, goal, "contribute", summary)
+        _record_proactive_artifact(
+            owner_id, goal, 1.0, target_path, None, None,
+            action_type="operator_apply", cooldown_key=target_path,
+        )
+    elif outcome.proposed:
+        summary = f"proposed fix for {target_path} ({outcome.reason})"
+        _log_episodic(owner_id, "OPERATOR_SCAN", target_path, goal, "signal", summary)
+        _record_proactive_artifact(
+            owner_id, goal, 0.5, target_path, None, None,
+            action_type="operator_proposal", cooldown_key=target_path,
+        )
+
+
+async def _run_operator_scan_cycle() -> None:
+    """One autonomous operator scan cycle.
+
+    Resolves the owner via db.get_user_by_email(settings.telegram_owner_email)
+    — the SAME identity resolution chat's manage_file path uses — and iterates
+    that owner's managed_file_targets. For each target: run its validator
+    command (the unfakeable detection oracle); a passing validator means the
+    target is healthy (skip, no LLM call). A failing validator means the
+    target is broken: if the target is on cooldown, skip (avoid hammering);
+    otherwise read the current content, ask the LLM for a fix, and route it
+    through operate_on_file(owner.id, ...) — the proven gate that decides
+    auto-apply vs propose-only and performs capture/apply/verify/rollback.
+
+    Never raises out of the loop: a refusal on one target (self-protection,
+    e.g. the rawos unit file) is caught, logged, and the cycle continues with
+    the remaining targets — per the explicit "refusal on one target does not
+    block others" requirement.
+
+    Stated deviation from "one action per cycle" (plan wording): every broken,
+    non-cooldown target is acted on within the same cycle, each independently
+    isolated by its own try/except. Serialization is per-target (the cooldown
+    + graduation ledger are per-target), so concurrent multi-target action
+    within one cycle does not corrupt any single target's rollback state.
+    """
+    if not settings.telegram_owner_email:
+        log.debug("operator_scan: telegram_owner_email unset — no-op")
+        return
+
+    owner = db.get_user_by_email(settings.telegram_owner_email)
+    if owner is None:
+        log.debug("operator_scan: telegram_owner_email has no matching user — no-op")
+        return
+
+    for target in db.list_managed_file_targets(owner.id):
+        target_path = target["target_path"]
+        validator_cmd = target["validator_cmd"]
+
+        validator_result = run_validator(validator_cmd)
+        if validator_result.passed:
+            continue  # healthy — nothing to do, no LLM call, no episodic spam
+
+        if _is_operator_cooldown(target_path):
+            log.debug("operator_scan: target on cooldown — target=%s", target_path)
+            continue
+
+        try:
+            current_content = get_arch().file_operator.read(target_path)
+            if current_content is None:
+                log.warning("operator_scan: target unreadable — target=%s", target_path)
+                continue
+
+            fix_content = await _generate_config_fix(
+                target_path, current_content, validator_result.output,
+            )
+            if fix_content is None:
+                continue
+
+            outcome = operate_on_file(owner.id, target_path, fix_content)
+        except FileOperatorRefusalError:
+            log.warning("operator_scan: refused self-protected target — target=%s", target_path)
+            continue
+        except Exception:
+            log.exception("operator_scan: error scanning target=%s", target_path)
+            continue
+
+        _route_operator_outcome(owner.id, target_path, outcome)
+
+
+async def rawos_operator_scan_loop() -> None:
+    """Periodic loop: autonomously scan owner-allowlisted managed file targets
+    and propose/apply reversible fixes via operate_on_file.
+
+    Gated by settings.operator_scan_enabled (default False — dormant, zero
+    behavior change until the owner opts in). Mirrors
+    rawos_narrative_consolidation_loop's shape: try/except per cycle so the
+    loop never dies, sleeps operator_scan_interval_s between cycles.
+    """
+    if not settings.operator_scan_enabled:
+        log.info("operator_scan: disabled — loop exits immediately")
+        return
+    interval = settings.operator_scan_interval_s
+    log.info("operator_scan: loop started (interval=%ds)", interval)
+    while True:
+        try:
+            await _run_operator_scan_cycle()
+        except Exception:
+            log.exception("operator_scan: cycle error (non-fatal)")
         await asyncio.sleep(interval)

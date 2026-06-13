@@ -94,6 +94,20 @@ class Settings(BaseSettings):
     # class graduates (>=3 verified human-merged successes, see
     # kernel.track_record) AND an operator flips this flag
 
+    # Milestone 6 ('Autonomous Operator Loop')
+    operator_scan_enabled: bool = False
+    operator_scan_interval_s: int = 600
+
+    # Phase 20 — system perception
+    system_perception_enabled: bool = False
+    system_perception_paths: list[str] = ["/root/rawos", "/etc/rawos", "/etc/systemd/system"]
+    system_perception_debounce_s: float = 2.0
+
+    # Phase 21 — system fs reflex
+    system_fs_reflex_enabled: bool = False
+    system_fs_reflex_interval_s: int = 30
+    system_fs_reflex_lookback_s: int = 90
+
     # Milestone 4 (\The window\) — Telegram front-door
     telegram_enabled:        bool = False
     telegram_bot_token:      str  = ""

@@ -12,7 +12,9 @@ from rawos.kernel.operator import (
     OperationResult,
     OperatorError,
     ReversibleFileEdit,
+    ValidatorResult,
     run_reversible_operation,
+    run_validator,
 )
 
 
@@ -83,3 +85,16 @@ def test_reversible_file_edit_apply_propagates_self_protection_refusal():
 
     with pytest.raises(FileOperatorRefusalError):
         edit.apply()
+
+
+def test_run_validator_passed_for_true_command():
+    result = run_validator("true")
+
+    assert result == ValidatorResult(passed=True, output="")
+
+
+def test_run_validator_failed_captures_output_for_false_command():
+    result = run_validator("echo broken-config 1>&2; false")
+
+    assert result.passed is False
+    assert "broken-config" in result.output
