@@ -30,6 +30,10 @@ dependencies = [
     "chromadb>=0.6",
     "numpy>=1.26",
     "scikit-learn>=1.5",
+    # Telegram integration
+    "python-telegram-bot>=22.8",
+    # AI gateway
+    "openai>=2.41",
     # CLI
     "click>=8.1",
     "rich>=13.0",
