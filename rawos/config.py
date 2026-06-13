@@ -83,8 +83,19 @@ class Settings(BaseSettings):
 
     # Stage 3 ("Earned, Reversible Autonomy") — graduated auto-apply
     autonomy_auto_apply_enabled: bool = False   # dormant until a (repo, anomaly_domain)
+
+    # Milestone 3 ('The being as the machine's operator') — managed file edits (R1)
+    operator_enabled: bool = False   # dormant: auto-apply only when ON AND (operation_class,
+    # target) graduated (>=3 verified successes). Propose-only when OFF or ungraduated.
     # class graduates (>=3 verified human-merged successes, see
     # kernel.track_record) AND an operator flips this flag
+
+    # Milestone 4 (\The window\) — Telegram front-door
+    telegram_enabled:        bool = False
+    telegram_bot_token:      str  = ""
+    telegram_owner_chat_id:  int  = 0
+    telegram_owner_email:    str  = ""
+    telegram_project_id:     str  = ""   # empty = auto-create "telegram" project
 
     # Autonomous server scan — operator-tunable cadence (cost vs reaction-time tradeoff)
     autonomous_scan_interval_s: int = 600   # seconds between full server scans

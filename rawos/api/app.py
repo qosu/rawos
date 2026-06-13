@@ -13,6 +13,7 @@ from rawos.monitoring import MetricsMiddleware
 
 import rawos.db as db
 from rawos.config import settings
+from rawos.kernel.telegram_gate import TelegramGate
 from rawos.api.auth_routes    import router as auth_router
 from rawos.api.project_routes import router as project_router
 from rawos.api.intent_routes  import router as intent_router
@@ -66,6 +67,7 @@ async def lifespan(app: FastAPI):
     calendar_task      = asyncio.create_task(_calendar_sync_loop_task(),          name="calendar-sync")
     autonomous_task    = asyncio.create_task(_start_autonomous_scan(),             name="autonomous-server-scan")
     self_probe_task    = asyncio.create_task(_start_self_probe_loop(),             name="rawos-self-probe")
+    _telegram_gate     = await _start_telegram_gate()
 
     # Clean up intents orphaned by crash/restart — any still 'executing' after
     # MAX_PROACTIVE_LOOP_TIME_S+60s could not have been completed normally.
@@ -81,6 +83,8 @@ async def lifespan(app: FastAPI):
     yield
 
     # Shutdown
+    if _telegram_gate is not None:
+        await _telegram_gate.stop()
     db_sync_task.cancel()
     proactive_task.cancel()
     watcher_task.cancel()
@@ -146,6 +150,26 @@ async def _daily_snapshot_loop() -> None:
             break
         except Exception:
             pass
+
+
+async def _start_telegram_gate():
+    """Start Telegram polling gate if telegram_enabled=True and token is set.
+
+    Returns the running TelegramGate instance, or None if disabled/misconfigured.
+    """
+    if not settings.telegram_enabled:
+        return None
+    if not settings.telegram_bot_token:
+        _log.warning("telegram_enabled=True but telegram_bot_token is empty — gate not started")
+        return None
+    gate = TelegramGate(
+        bot_token=settings.telegram_bot_token,
+        owner_chat_id=settings.telegram_owner_chat_id,
+        owner_email=settings.telegram_owner_email,
+        project_id=settings.telegram_project_id,
+    )
+    await gate.start()
+    return gate
 
 
 app = FastAPI(

@@ -1,6 +1,6 @@
 # rawos — PLAN.md
 
-Last updated: 2026-06-09
+Last updated: 2026-06-12
 
 ---
 
@@ -13,6 +13,30 @@ The thesis: **an AI that acts → self-verifies → self-rates — with no human
 Every other AI system in production today is reactive. It waits. It responds. It requires a human to pull the trigger. rawos does not. rawos watches, probes, decides, fixes, verifies, and rates its own work — in a continuous loop — without anyone asking it to.
 
 This is not a product feature. It is a claim about what AI can become.
+
+---
+
+## Product Roadmap — The 5-Milestone Arc
+
+rawos is built toward one goal: **the first OS where AI lives inside it.** Stack inversion:
+AI IS the OS. Host kernel (Linux/macOS/Windows) = interchangeable CPU architecture.
+Single-owner personal OS. This arc is permanent — it does not change between sessions.
+
+| # | Milestone | Core idea | Status |
+|---|-----------|-----------|--------|
+| 1 | **Front door = the being** | `ssh host` → rawos AI, not bash. Login *is* the being. | **DONE** — Phase 13, live on prod |
+| 2 | **One continuous life** | Persistent memory + 1 identity across every session. Being never resets. | **DONE** — user_model + self-narrative (commits `6c1c38ac`, `789150df`) |
+| 3 | **Being as operator** | AI manages real host files under earned-reversible-autonomy (R0–R3 tiers). | **DONE** — R1 operator + `manage_file` tool, 632 tests |
+| 4 | **The window** | Phone + voice client that connects to the being from anywhere. | **IN PROGRESS** |
+| 5 | **Installable substrate** | Package rawos so anyone can install it on their own machine. | **NOT STARTED** |
+
+### Mapping to technical phases (PLAN.md Phase 13–16)
+- Milestone 1 ← Phase 13 (The Inversion)
+- Milestone 2 ← Phase 14 (Accountable Agent) + Phase 15 (Intent Grounding) + session Milestone 2
+- Milestone 3 ← Phase 16 (Self-Modification) + session Milestone 3 (R1 operator)
+- Milestone 4 ← Phase 17 (Telegram front-door, `rawos/kernel/telegram_gate.py`, polling mode)
+- Milestone 5 ← Phase 18 (to be defined)
+
 
 ---
 

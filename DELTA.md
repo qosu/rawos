@@ -1,3 +1,7 @@
-CHANGED: nothing new this turn -- verified existing impl (commits f5084f97, aa2ba09c, 8346c7c1, ba3f6b73, c97781cc)
-WHY: Milestone 1 (S5 "Arrive INTO the being") already shipped: session_start digest (context_routes.py + cli/main.py _show_session_digest), frontdoor enter/install/commit/status/uninstall/_revert (kernel/frontdoor.py), dead-man's-switch escape hatch, installed: yes on prod. Phase 16 self-probe ACTIVE (self_probe_enabled=True, c97781cc fix proven in prod).
-NEXT: 556/556 pass, rawos.service active, /metrics 200. Tasks #8-11 marked completed. Milestone 1 CLOSED. Phase 2 of roadmap (S6.2 "one continuous life" -- continuity over episodic memory) is next strategic direction, not yet started.
+CHANGED: rawos/kernel/telegram_gate.py (NEW — TelegramGate: auth gate, text+voice dispatch, OpenAI Whisper STT, orchestrator integration).
+CHANGED: rawos/config.py (+5 telegram_* fields: enabled, bot_token, owner_chat_id, owner_email, project_id).
+CHANGED: rawos/api/app.py (+TelegramGate import, +_start_telegram_gate fn, lifespan startup+shutdown wired).
+CHANGED: tests/test_telegram_gate.py (NEW — 13 tests: config, auth, text dispatch, _run_turn, voice pipeline, _resolve_owner).
+CHANGED: tests/test_telegram_lifespan.py (NEW — 3 tests: disabled/enabled/token-missing).
+WHY: Milestone 4 (The window) — Telegram phone client talking to the being. 648/648 pass.
+NEXT: To activate: set TELEGRAM_BOT_TOKEN + TELEGRAM_OWNER_CHAT_ID + TELEGRAM_OWNER_EMAIL + TELEGRAM_ENABLED=true in env. Restart rawos.service.
