@@ -26,6 +26,7 @@ import click
 import httpx
 
 from rawos.kernel.arch.linux import LinuxLogReader, LinuxServiceManager
+from rawos.installer.setup import SetupWizard
 
 _CONFIG_DIR  = Path.home() / ".rawos"
 _CREDS_FILE  = _CONFIG_DIR / "credentials.json"
@@ -1734,6 +1735,56 @@ def frontdoor_revert(snapshot: str) -> None:
     if arch.validate():
         arch.reload()
     # Intentionally silent — this runs as a systemd transient unit
+
+
+
+# setup command
+
+
+@cli.command("setup")
+@click.option("--base-dir", required=True, help="Directory where rawos will be installed")
+@click.option("--openai-key", required=True, help="OpenAI API key")
+@click.option("--telegram-token", required=True, help="Telegram bot token")
+@click.option("--telegram-owner-id", required=True, help="Telegram owner user ID")
+@click.option("--exec-start", required=True, help="ExecStart path for the systemd unit")
+@click.option("--port", default=8002, show_default=True, help="Port rawos listens on")
+@click.option("--name", default="rawos", show_default=True, help="Service unit name")
+@click.option("--unit-dir", default="/etc/systemd/system", hidden=True)
+@click.option("--no-service", is_flag=True, default=False, help="Skip systemd unit installation")
+@click.option("--force", is_flag=True, default=False, help="Overwrite existing .env")
+def setup(
+    base_dir: str,
+    openai_key: str,
+    telegram_token: str,
+    telegram_owner_id: str,
+    exec_start: str,
+    port: int,
+    name: str,
+    unit_dir: str,
+    no_service: bool,
+    force: bool,
+) -> None:
+    """Run the rawos installation wizard."""
+    wizard = SetupWizard(base_dir=base_dir)
+    wizard.create_dirs()
+    click.echo(f"Created directories under {base_dir}")
+
+    wizard.write_env(
+        openai_api_key=openai_key,
+        telegram_token=telegram_token,
+        telegram_owner_id=telegram_owner_id,
+        port=port,
+        force=force,
+    )
+    click.echo(f"Wrote .env to {base_dir}/.env")
+
+    if not no_service:
+        content = wizard.generate_service(exec_start=exec_start, name=name)
+        mgr = LinuxServiceManager()
+        mgr.install_unit(name, content, unit_dir=unit_dir)
+        click.echo(f"Installed systemd unit '{name}.service'")
+
+    click.echo("rawos setup complete.")
 
 
 
