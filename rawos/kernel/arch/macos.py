@@ -265,3 +265,31 @@ class MacOSFrontDoor:
 
     def restore(self, snapshot: str) -> None:
         raise NotImplementedError("front-door backend not yet implemented for macOS")
+
+
+
+class MacOSFileOperator:
+    """macOS file-operator backend — NOT YET IMPLEMENTED.
+
+    supports_file_ops = False: the operator path is disabled on macOS
+    (kernel.operator checks this flag before attempting any file edit).
+    The Protocol seam exists; this stub makes the gap explicit rather than
+    hidden, mirroring MacOSFrontDoor.
+    """
+
+    supports_file_ops = False
+
+    def read(self, path: str) -> bytes | None:
+        raise NotImplementedError("file operator backend not yet implemented for macOS")
+
+    def write(self, path: str, content: bytes) -> None:
+        raise NotImplementedError("file operator backend not yet implemented for macOS")
+
+    def exists(self, path: str) -> bool:
+        raise NotImplementedError("file operator backend not yet implemented for macOS")
+
+    def backup(self, path: str):
+        raise NotImplementedError("file operator backend not yet implemented for macOS")
+
+    def restore(self, snapshot) -> None:
+        raise NotImplementedError("file operator backend not yet implemented for macOS")

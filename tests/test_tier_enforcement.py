@@ -492,3 +492,98 @@ class TestEscapeVectors:
         assert not result.success, "hardlink write to live TIER 0 inode must be blocked"
         assert target.read_text() == "# tier0 live\n", "live file must be reverted"
         assert "TIER VIOLATION" in result.output
+
+    def test_bash_rename_tier1_to_tier0_in_worktree_blocked(self, tmp_path, monkeypatch):
+        """bash mv-ing a TIER 1 path to a TIER 0 path in worktree must be blocked and reverted."""
+        from rawos.kernel.tools import execute
+
+        repo, worktree = self._setup_linked_worktree(tmp_path)
+        self._patch_common_dir(monkeypatch, repo)
+
+        # Seed a TIER 1 file to move
+        src = worktree / "tests" / "probe.py"
+        src.parent.mkdir(parents=True, exist_ok=True)
+        src.write_text("# probe\n")
+
+        dst = worktree / "rawos" / "api" / "injected.py"
+        result = asyncio.run(execute(
+            "bash", {"command": f"mv {src} {dst}"}, str(worktree),
+        ))
+
+        assert not result.success, "rename TIER1→TIER0 must be blocked"
+        assert not dst.exists(), "injected TIER0 file must be cleaned up"
+        assert "TIER VIOLATION" in result.output
+
+    def test_bash_rename_tier0_to_tier1_in_worktree_blocked(self, tmp_path, monkeypatch):
+        """bash mv-ing a TIER 0 file to a TIER 1 path must be blocked (source restored)."""
+        from rawos.kernel.tools import execute
+
+        repo, worktree = self._setup_linked_worktree(tmp_path)
+        self._patch_common_dir(monkeypatch, repo)
+
+        src = worktree / "rawos" / "api" / "app.py"
+        dst = worktree / "tests" / "stolen.py"
+        result = asyncio.run(execute(
+            "bash", {"command": f"mv {src} {dst}"}, str(worktree),
+        ))
+
+        assert not result.success, "rename TIER0→TIER1 must be blocked"
+        assert src.exists(), "TIER0 source must be restored"
+        assert "TIER VIOLATION" in result.output
+
+    def test_write_file_dotdot_path_traversal_blocked(self, tmp_path, monkeypatch):
+        """write_file with a dotdot path that exits workdir must raise PathTraversalError."""
+        from rawos.kernel.tools import execute
+
+        repo, worktree = self._setup_linked_worktree(tmp_path)
+        self._patch_common_dir(monkeypatch, repo)
+
+        # Path exits the worktree via dotdot
+        escape_path = "tests/../../etc/passwd"
+        result = asyncio.run(execute(
+            "write_file", {"path": escape_path, "content": "root:EVIL:0:0::/root:/bin/sh"},
+            str(worktree),
+        ))
+
+        assert not result.success, "dotdot path escaping workdir must be blocked"
+        from pathlib import Path
+        assert "EVIL" not in Path("/etc/passwd").read_text(), "/etc/passwd must be untouched"
+
+    def test_write_file_absolute_path_to_tier0_in_worktree_blocked(self, tmp_path, monkeypatch):
+        """write_file with absolute path to a TIER 0 file inside worktree must be blocked."""
+        from rawos.kernel.tools import execute
+
+        repo, worktree = self._setup_linked_worktree(tmp_path)
+        self._patch_common_dir(monkeypatch, repo)
+
+        tier0_in_worktree = str(worktree / "rawos" / "api" / "app.py")
+        result = asyncio.run(execute(
+            "write_file", {"path": tier0_in_worktree, "content": "EVIL"},
+            str(worktree),
+        ))
+
+        assert not result.success, "absolute-path write to TIER0 in worktree must be blocked"
+        assert (worktree / "rawos" / "api" / "app.py").read_text() == "# tier0 live\n", \
+            "TIER0 file must be restored"
+
+    def test_write_file_hardlink_to_live_repo_blocked(self, tmp_path, monkeypatch):
+        """write_file writing to a TIER 1 path that is a hardlink to a live TIER 0 file must be blocked."""
+        import os
+        from rawos.kernel.tools import execute
+
+        repo, worktree = self._setup_linked_worktree(tmp_path)
+        self._patch_common_dir(monkeypatch, repo)
+
+        target = repo / "rawos" / "api" / "app.py"
+        hardlink = worktree / "tests" / "evil_hardlink.py"
+        hardlink.parent.mkdir(parents=True, exist_ok=True)
+        os.link(str(target), str(hardlink))
+
+        result = asyncio.run(execute(
+            "write_file", {"path": "tests/evil_hardlink.py", "content": "EVIL"},
+            str(worktree),
+        ))
+
+        assert not result.success, "write_file through hardlink to live TIER0 must be blocked"
+        assert target.read_text() == "# tier0 live\n", "live TIER0 file must be reverted"
+        assert "TIER VIOLATION" in result.output

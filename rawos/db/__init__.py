@@ -748,3 +748,133 @@ def get_proactive_artifacts_since(
             (user_id, since_ts, limit),
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+def get_operator_track_record(
+    user_id: str, operation_class: str, target: str
+) -> "TrackRecordState":
+    """Return the operator track-record state for (user, operation_class, target).
+
+    Returns a fresh untrusted TrackRecordState (verified_successes=0, graduated=False)
+    if no row exists — identical default-on-miss semantics to get_track_record().
+    """
+    from rawos.kernel.track_record import TrackRecordState
+    with _conn() as conn:
+        row = conn.execute(
+            """SELECT verified_successes, graduated, last_outcome,
+                      last_target_sha, pending_since
+               FROM operator_track_record
+               WHERE user_id = ? AND operation_class = ? AND target = ?""",
+            (user_id, operation_class, target),
+        ).fetchone()
+    if row is None:
+        return TrackRecordState()
+    return TrackRecordState(
+        verified_successes=row["verified_successes"],
+        graduated=bool(row["graduated"]),
+        last_outcome=row["last_outcome"],
+        last_fix_sha=row["last_target_sha"],
+        # last_fix_branch stays None — no branch concept for file edits
+        pending_since=row["pending_since"],
+    )
+
+
+def update_operator_track_record(
+    user_id: str,
+    operation_class: str,
+    target: str,
+    *,
+    verified: bool,
+    now: int,
+) -> "TrackRecordState":
+    """Advance and persist the operator track record for one operation outcome.
+
+    `verified=True`  → apply succeeded and validator passed (no anomaly).
+    `verified=False` → apply was rolled back by the validator (anomaly).
+
+    Reuses kernel.track_record._advance_state verbatim (pure, class-agnostic).
+    `fix_branch` is always None for file edits (no git branch concept); the
+    stability window advances on two consecutive verified=True calls, matching
+    the code-fix graduation discipline.
+
+    Returns the new state.  Does NOT write to operator_track_record when the
+    state is unchanged (same guard as update_track_record in track_record.py).
+    """
+    import logging as _logging
+    _log = _logging.getLogger("rawos.db.operator_track_record")
+    from rawos.kernel.track_record import _advance_state, GRADUATION_THRESHOLD
+
+    current = get_operator_track_record(user_id, operation_class, target)
+    new = _advance_state(
+        current,
+        anomaly_present=not verified,
+        branch_merged=True,
+        fix_branch=None,
+        fix_sha=None,
+        now=now,
+    )
+    if new == current:
+        return new
+
+    with _conn() as conn:
+        conn.execute(
+            """INSERT INTO operator_track_record
+                   (user_id, operation_class, target, verified_successes,
+                    graduated, last_outcome, last_target_sha, pending_since,
+                    updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(user_id, operation_class, target) DO UPDATE SET
+                   verified_successes = excluded.verified_successes,
+                   graduated          = excluded.graduated,
+                   last_outcome       = excluded.last_outcome,
+                   last_target_sha    = excluded.last_target_sha,
+                   pending_since      = excluded.pending_since,
+                   updated_at         = excluded.updated_at""",
+            (
+                user_id, operation_class, target,
+                new.verified_successes, int(new.graduated),
+                new.last_outcome, new.last_fix_sha, new.pending_since, now,
+            ),
+        )
+    if new.graduated and not current.graduated:
+        _log.info(
+            "operator: class graduated operation_class=%s target=%s after %d verified successes",
+            operation_class, target, new.verified_successes,
+        )
+    return new
+
+
+def get_managed_file_target(user_id: str, target_path: str) -> dict | None:
+    """Return the allowlist row for (user, target_path), or None if not allowlisted."""
+    with _conn() as conn:
+        row = conn.execute(
+            """SELECT target_path, validator_cmd, created_at
+               FROM managed_file_targets
+               WHERE user_id = ? AND target_path = ?""",
+            (user_id, target_path),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def add_managed_file_target(user_id: str, target_path: str, validator_cmd: str) -> None:
+    """Register (target_path, validator_cmd) as an owner-allowlisted target.
+
+    Upserts: re-registering a path updates its validator_cmd.
+    """
+    with _conn() as conn:
+        conn.execute(
+            """INSERT INTO managed_file_targets (user_id, target_path, validator_cmd)
+               VALUES (?, ?, ?)
+               ON CONFLICT(user_id, target_path) DO UPDATE SET
+                   validator_cmd = excluded.validator_cmd""",
+            (user_id, target_path, validator_cmd),
+        )
+
+
+def remove_managed_file_target(user_id: str, target_path: str) -> None:
+    """Remove target_path from the owner allowlist (no-op if not present)."""
+    with _conn() as conn:
+        conn.execute(
+            "DELETE FROM managed_file_targets WHERE user_id = ? AND target_path = ?",
+            (user_id, target_path),
+        )

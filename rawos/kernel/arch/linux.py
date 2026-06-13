@@ -6,9 +6,12 @@ kernel/sandbox.py — Stage A is a zero-behavior-change extraction.
 """
 from __future__ import annotations
 
+import os
 import subprocess
+from pathlib import Path
 
-from rawos.kernel.arch.base import ReadonlyWhitelist
+from rawos.config import settings
+from rawos.kernel.arch.base import FileOperatorRefusalError, FileSnapshot, ReadonlyWhitelist
 
 
 class LinuxResourceProbe:
@@ -267,3 +270,65 @@ class LinuxFrontDoor:
                 if len(parts) == 2:
                     return parts[1]
         return None
+
+
+
+_RAWOS_UNIT_FILE = "/etc/systemd/system/rawos.service"
+_RAWOS_FRONTDOOR_SSHD_CONFIG = "/etc/ssh/sshd_config.d/50-rawos-frontdoor.conf"
+
+
+class LinuxFileOperator:
+    """Linux implementation of the FileOperator Protocol.
+
+    Operates on absolute paths via plain filesystem calls. write()/restore()
+    refuse self-protected paths: the rawos systemd unit, the front-door sshd
+    drop-in (arch/linux.py LinuxFrontDoor), and anything under rawos's own
+    source tree (settings.rawos_source_root — this also covers the operator
+    allowlist DB at <rawos_source_root>/data/rawos.db, so no separate special
+    case is needed). read()/exists()/backup() are unrestricted (R0).
+    """
+
+    supports_file_ops = True
+
+    def read(self, path: str) -> bytes | None:
+        try:
+            return Path(path).read_bytes()
+        except FileNotFoundError:
+            return None
+
+    def write(self, path: str, content: bytes) -> None:
+        self._refuse_if_protected(path)
+        p = Path(path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(content)
+
+    def exists(self, path: str) -> bool:
+        return Path(path).exists()
+
+    def backup(self, path: str) -> FileSnapshot:
+        content = self.read(path)
+        if content is None:
+            return FileSnapshot(path=path, existed=False, content=None)
+        return FileSnapshot(path=path, existed=True, content=content)
+
+    def restore(self, snapshot: FileSnapshot) -> None:
+        self._refuse_if_protected(snapshot.path)
+        if snapshot.existed:
+            p = Path(snapshot.path)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(snapshot.content)
+        else:
+            try:
+                Path(snapshot.path).unlink()
+            except FileNotFoundError:
+                pass
+
+    def _refuse_if_protected(self, path: str) -> None:
+        normalized = os.path.normpath(path)
+        if normalized in (_RAWOS_UNIT_FILE, _RAWOS_FRONTDOOR_SSHD_CONFIG):
+            raise FileOperatorRefusalError(f"refused: {normalized} is self-protected")
+        rawos_root = os.path.normpath(settings.rawos_source_root)
+        if normalized == rawos_root or normalized.startswith(rawos_root + os.sep):
+            raise FileOperatorRefusalError(
+                f"refused: {normalized} is within rawos's own source tree ({rawos_root})"
+            )

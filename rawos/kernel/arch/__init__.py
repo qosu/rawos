@@ -12,10 +12,11 @@ from dataclasses import dataclass
 from functools import lru_cache
 
 from rawos.config import Settings
-from rawos.kernel.arch.base import CrashReporter, LogReader, ResourceProbe, ServiceManager, ShellPolicy
+from rawos.kernel.arch.base import CrashReporter, FileOperator, LogReader, ResourceProbe, ServiceManager, ShellPolicy
 from rawos.kernel.arch.detect import OS, current_os
 from rawos.kernel.arch.linux import (
     LinuxCrashReporter,
+    LinuxFileOperator,
     LinuxLogReader,
     LinuxResourceProbe,
     LinuxServiceManager,
@@ -23,6 +24,7 @@ from rawos.kernel.arch.linux import (
 )
 from rawos.kernel.arch.macos import (
     MacOSCrashReporter,
+    MacOSFileOperator,
     MacOSLogReader,
     MacOSResourceProbe,
     MacOSServiceManager,
@@ -30,6 +32,7 @@ from rawos.kernel.arch.macos import (
 )
 from rawos.kernel.arch.windows import (
     WindowsCrashReporter,
+    WindowsFileOperator,
     WindowsLogReader,
     WindowsResourceProbe,
     WindowsServiceManager,
@@ -44,6 +47,7 @@ class Backend:
     log_reader: LogReader
     shell_policy: ShellPolicy
     crash_reporter: CrashReporter
+    file_operator: FileOperator
 
 
 @lru_cache(maxsize=None)
@@ -55,6 +59,7 @@ def _build_backend(os_: OS) -> Backend:
             log_reader=LinuxLogReader(),
             shell_policy=LinuxShellPolicy(),
             crash_reporter=LinuxCrashReporter(),
+            file_operator=LinuxFileOperator(),
         )
     if os_ == OS.MACOS:
         return Backend(
@@ -63,6 +68,7 @@ def _build_backend(os_: OS) -> Backend:
             log_reader=MacOSLogReader(),
             shell_policy=MacOSShellPolicy(),
             crash_reporter=MacOSCrashReporter(),
+            file_operator=MacOSFileOperator(),
         )
     return Backend(
         resource_probe=WindowsResourceProbe(),
@@ -70,6 +76,7 @@ def _build_backend(os_: OS) -> Backend:
         log_reader=WindowsLogReader(),
         shell_policy=WindowsShellPolicy(),
         crash_reporter=WindowsCrashReporter(),
+        file_operator=WindowsFileOperator(),
     )
 
 

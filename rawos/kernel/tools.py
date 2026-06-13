@@ -655,6 +655,126 @@ async def _git_commit(params: dict[str, Any], workdir: str) -> ToolResult:
     )
 
 
+
+async def _manage_file(params: dict[str, Any], workdir: str) -> ToolResult:
+    """Managed file edits (R1 operator path): allowlist mgmt + propose/apply lifecycle."""
+    import time as _time
+    import rawos.db as _db
+    from rawos.kernel.billing_context import get_billing_context
+    from rawos.kernel.arch.base import FileOperatorRefusalError
+    from rawos.kernel.operator import OperatorError, operate_on_file, execute_approved_file_edit
+
+    ctx = get_billing_context()
+    if ctx is None:
+        return ToolResult(output="manage_file: no active agent context", success=False, duration_ms=0)
+    user_id: str = ctx["user_id"]
+
+    action = params.get("action", "")
+    target_path: str = params.get("target_path", "")
+    t0 = _time.monotonic()
+
+    def _ms() -> int:
+        return int((_time.monotonic() - t0) * 1000)
+
+    if action == "add_target":
+        validator_cmd: str = params.get("validator_cmd", "")
+        if not target_path or not validator_cmd:
+            return ToolResult(
+                output="manage_file add_target: target_path and validator_cmd required",
+                success=False, duration_ms=_ms(),
+            )
+        _db.add_managed_file_target(user_id, target_path, validator_cmd)
+        return ToolResult(
+            output=f"registered: {target_path} (validator: {validator_cmd})",
+            success=True, duration_ms=_ms(),
+        )
+
+    if action == "remove_target":
+        if not target_path:
+            return ToolResult(
+                output="manage_file remove_target: target_path required",
+                success=False, duration_ms=_ms(),
+            )
+        _db.remove_managed_file_target(user_id, target_path)
+        return ToolResult(output=f"removed: {target_path}", success=True, duration_ms=_ms())
+
+    if action == "status":
+        if not target_path:
+            return ToolResult(
+                output="manage_file status: target_path required",
+                success=False, duration_ms=_ms(),
+            )
+        managed = _db.get_managed_file_target(user_id, target_path)
+        if managed is None:
+            return ToolResult(
+                output=f"not allowlisted: {target_path}",
+                success=True, duration_ms=_ms(),
+            )
+        track = _db.get_operator_track_record(user_id, "file_edit", target_path)
+        output = (
+            f"target: {target_path}\n"
+            f"validator_cmd: {managed['validator_cmd']}\n"
+            f"graduated: {track.graduated}\n"
+            f"verified_successes: {track.verified_successes}\n"
+            f"last_outcome: {track.last_outcome}"
+        )
+        return ToolResult(output=output, success=True, duration_ms=_ms())
+
+    if action == "edit":
+        if not target_path:
+            return ToolResult(
+                output="manage_file edit: target_path required",
+                success=False, duration_ms=_ms(),
+            )
+        new_content = params.get("new_content", "").encode("utf-8")
+        try:
+            outcome = operate_on_file(user_id, target_path, new_content)
+        except FileOperatorRefusalError as exc:
+            return ToolResult(output=f"refused (self-protection): {exc}", success=False, duration_ms=_ms())
+        except OperatorError as exc:
+            return ToolResult(output=f"operator error: {exc}", success=False, duration_ms=_ms())
+
+        if outcome.auto_applied:
+            res = outcome.operation_result
+            assert res is not None
+            status = "auto-applied" if res.verified else "applied-but-validator-failed (restored)"
+            return ToolResult(
+                output=f"{status}: {target_path}\nreason: {outcome.reason}",
+                success=res.verified, duration_ms=_ms(),
+            )
+        return ToolResult(
+            output=(
+                f"proposed (pending owner approval): {target_path}\n"
+                f"reason: {outcome.reason}\n"
+                "Call manage_file(action=\'approved_apply\', ...) after reviewing to apply."
+            ),
+            success=True, duration_ms=_ms(),
+        )
+
+    if action == "approved_apply":
+        if not target_path:
+            return ToolResult(
+                output="manage_file approved_apply: target_path required",
+                success=False, duration_ms=_ms(),
+            )
+        new_content = params.get("new_content", "").encode("utf-8")
+        try:
+            res = execute_approved_file_edit(user_id, target_path, new_content)
+        except FileOperatorRefusalError as exc:
+            return ToolResult(output=f"refused (self-protection): {exc}", success=False, duration_ms=_ms())
+        except OperatorError as exc:
+            return ToolResult(output=f"operator error: {exc}", success=False, duration_ms=_ms())
+        status = "applied and verified" if res.verified else "applied but validator failed (restored)"
+        return ToolResult(output=f"{status}: {target_path}", success=res.verified, duration_ms=_ms())
+
+    return ToolResult(
+        output=(
+            f"manage_file: unknown action {action!r}. "
+            "Valid: add_target, remove_target, status, edit, approved_apply"
+        ),
+        success=False, duration_ms=_ms(),
+    )
+
 REGISTRY: dict[str, ToolFn] = {
     "bash":       _bash,
     "bash_readonly": _bash_readonly,
@@ -665,6 +785,7 @@ REGISTRY: dict[str, ToolFn] = {
     "deploy":      _deploy,
     "git_branch":  _git_branch,
     "git_commit":  _git_commit,
+    "manage_file": _manage_file,
 }
 
 TOOL_DEFINITIONS: list[dict] = [
@@ -815,6 +936,44 @@ TOOL_DEFINITIONS: list[dict] = [
                         "description": "Commit message (default: rawos: autonomous fix).",
                     },
                 },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "manage_file",
+            "description": (
+                "Manage host files via the R1 reversible operator path. "
+                "Actions: add_target (register path+validator in allowlist), "
+                "remove_target (deregister), status (show allowlist+graduation state), "
+                "edit (propose or auto-apply based on graduation), "
+                "approved_apply (execute owner-approved edit, always records toward graduation). "
+                "Requires files to be pre-allowlisted with a validator_cmd. "
+                "Never touches rawos service files or source tree."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["add_target", "remove_target", "status", "edit", "approved_apply"],
+                        "description": "Operation to perform",
+                    },
+                    "target_path": {
+                        "type": "string",
+                        "description": "Absolute path to the managed file",
+                    },
+                    "validator_cmd": {
+                        "type": "string",
+                        "description": "Shell command that exits 0 iff the file is valid (required for add_target)",
+                    },
+                    "new_content": {
+                        "type": "string",
+                        "description": "New UTF-8 file content (required for edit and approved_apply)",
+                    },
+                },
+                "required": ["action"],
             },
         },
     },

@@ -118,3 +118,66 @@ class FrontDoor(Protocol):
     def restore(self, snapshot: str) -> None:
         """Roll back the config to the state captured by snapshot()."""
         ...
+
+
+@dataclass(frozen=True)
+class FileSnapshot:
+    """Captured pre-state of a file for FileOperator.backup/restore.
+
+    `existed=False, content=None` represents "the file did not exist" —
+    restore() of such a snapshot deletes the file (back to absent).
+    """
+
+    path: str
+    existed: bool
+    content: bytes | None
+
+
+class FileOperatorRefusalError(Exception):
+    """Raised when a FileOperator refuses to write/restore a self-protected path.
+
+    Self-protected paths (the rawos unit file, the §5 front-door sshd config,
+    and the rawos source tree itself — which also covers the operator
+    allowlist DB under it) can never be mutated through this Protocol, even
+    if an owner allowlist entry would otherwise permit it. read()/exists()/
+    backup() remain available (R0, read-only).
+    """
+
+
+class FileOperator(Protocol):
+    """OS-specific mechanism for the operator to read/write/snapshot real
+    machine files, operating on absolute paths.
+
+    The kernel uses only this Protocol for operator file edits — never
+    kernel.sandbox.run_bash. write()/restore() raise FileOperatorRefusalError
+    for self-protected paths (see FileOperatorRefusalError).
+    """
+
+    supports_file_ops: bool
+
+    def read(self, path: str) -> bytes | None:
+        """Return the file's contents, or None if it does not exist."""
+        ...
+
+    def write(self, path: str, content: bytes) -> None:
+        """Write `content` to `path`, creating parent directories as needed.
+
+        Raises FileOperatorRefusalError for self-protected paths.
+        """
+        ...
+
+    def exists(self, path: str) -> bool:
+        """Return True if `path` exists."""
+        ...
+
+    def backup(self, path: str) -> FileSnapshot:
+        """Capture the current state of `path` for later restore()."""
+        ...
+
+    def restore(self, snapshot: FileSnapshot) -> None:
+        """Restore `snapshot.path` to the state captured by backup().
+
+        If the snapshot represents "absent", the file is deleted.
+        Raises FileOperatorRefusalError for self-protected paths.
+        """
+        ...
