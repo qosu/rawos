@@ -20,6 +20,7 @@ import rawos.db as db
 from rawos.config import settings
 from rawos.context.user_model import get_user_model
 from rawos.kernel import memory_index
+from rawos.kernel.entity import RAWOS_ENTITY_USER_ID, RAWOS_ENTITY_PROJECT_ID
 
 log = logging.getLogger("rawos.context_builder")
 
@@ -97,6 +98,11 @@ def build_context(
     if continuity_block:
         system_addition = continuity_block + system_addition
 
+    # Seam C: surface being's autonomous life to owner conversations
+    being_block = _build_being_block(user_id, query)
+    if being_block:
+        system_addition = system_addition + being_block
+
     return messages, system_addition
 
 
@@ -163,4 +169,50 @@ def _build_continuity_block(user_id: str) -> str:
         )
     except Exception as e:
         log.debug("continuity context retrieval skipped: %s", e)
+        return ""
+
+
+def _build_being_block(user_id: str, query: str) -> str:
+    """Seam C — Surface being's autonomous life to owner conversations.
+
+    When the conversing user is NOT the entity itself, inject:
+    - The being's self-narrative (from db.get_self_narrative)
+    - Bounded semantic recall of being's episodic memories (top-3)
+
+    Returns "" in all failure cases (best-effort, non-fatal).
+    Never injects when user_id == RAWOS_ENTITY_USER_ID (no double-inject).
+    """
+    if user_id == RAWOS_ENTITY_USER_ID:
+        return ""
+    try:
+        narrative = db.get_self_narrative(RAWOS_ENTITY_USER_ID)
+        recall_parts: list[str] = []
+        try:
+            recall_results = memory_index.search_memories(
+                RAWOS_ENTITY_PROJECT_ID, query, n_results=3
+            )
+            for doc, _meta in recall_results:
+                recall_parts.append(doc[:400])
+        except Exception as e:
+            log.debug("being recall skipped: %s", e)
+
+        if not narrative and not recall_parts:
+            return ""
+
+        lines: list[str] = []
+        if narrative:
+            lines.append(narrative)
+        if recall_parts:
+            lines.append("Recent autonomous activity:")
+            for part in recall_parts:
+                lines.append(f"- {part}")
+
+        return (
+            "\n\n<being_life>\n"
+            "Being's autonomous life — what rawos has been doing on its own:\n\n"
+            + "\n".join(lines)
+            + "\n</being_life>"
+        )
+    except Exception as e:
+        log.debug("being block skipped: %s", e)
         return ""

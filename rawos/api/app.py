@@ -67,6 +67,7 @@ async def lifespan(app: FastAPI):
     calendar_task      = asyncio.create_task(_calendar_sync_loop_task(),          name="calendar-sync")
     autonomous_task    = asyncio.create_task(_start_autonomous_scan(),             name="autonomous-server-scan")
     self_probe_task    = asyncio.create_task(_start_self_probe_loop(),             name="rawos-self-probe")
+    narrative_task     = asyncio.create_task(_start_narrative_consolidation_loop(), name="narrative-consolidation")
     _telegram_gate     = await _start_telegram_gate()
 
     # Clean up intents orphaned by crash/restart — any still 'executing' after
@@ -92,7 +93,8 @@ async def lifespan(app: FastAPI):
     calendar_task.cancel()
     autonomous_task.cancel()
     self_probe_task.cancel()
-    await asyncio.gather(db_sync_task, proactive_task, watcher_task, snapshot_task, calendar_task, autonomous_task, self_probe_task, return_exceptions=True)
+    narrative_task.cancel()
+    await asyncio.gather(db_sync_task, proactive_task, watcher_task, snapshot_task, calendar_task, autonomous_task, self_probe_task, narrative_task, return_exceptions=True)
     stop_filesystem_watcher()
     _log.info("rawos shutdown complete")
 
@@ -118,6 +120,11 @@ async def _start_autonomous_scan() -> None:
 async def _start_self_probe_loop() -> None:
     from rawos.scheduler.proactive import rawos_self_probe_loop
     await rawos_self_probe_loop()
+
+
+async def _start_narrative_consolidation_loop() -> None:
+    from rawos.scheduler.proactive import rawos_narrative_consolidation_loop
+    await rawos_narrative_consolidation_loop()
 
 
 async def _personal_watcher_reload_loop() -> None:

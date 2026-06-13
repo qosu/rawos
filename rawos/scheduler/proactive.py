@@ -26,6 +26,8 @@ from rawos.kernel.track_record import get_track_record, is_branch_merged, update
 from rawos.kernel.reversible_apply import ApplyResult, reversible_apply
 from rawos.kernel.arch import get_arch
 from rawos.kernel.sandbox import run_bash
+from rawos.kernel import memory_index
+from rawos.kernel.self_narrative import write_self_narrative
 from rawos.context.server_scanner import ServerAnomaly
 from rawos.config import settings
 from rawos.inference.intent_engine import InferredIntent, infer_intent
@@ -457,8 +459,14 @@ def _log_episodic(
     action_summary: str | None,
     repo_root: str = "",
     self_confidence: float = 0.0,
+    project_id: str = "",
 ) -> str | None:
-    """Record rawos decision to episodic_memory. Returns row id for outcome updates."""
+    """Record rawos decision to episodic_memory. Returns row id for outcome updates.
+
+    Seam A: when project_id provided, also indexes the experience into the semantic
+    store (best-effort — index failure must never break episodic row creation).
+    """
+    row_id: str | None = None
     try:
         with db._conn() as conn:
             row = conn.execute(
@@ -470,10 +478,28 @@ def _log_episodic(
                 (user_id, trigger_type, domain, repo_root, inferred_goal,
                  decision, action_summary, self_confidence),
             ).fetchone()
-        return row["id"] if row else None
+        row_id = row["id"] if row else None
     except Exception:
         log.debug("episodic log failed (non-fatal): user=%s", user_id)
-        return None
+        return row_id
+    # Seam A: index into semantic store so autonomous experience is retrievable.
+    if project_id and row_id:
+        text = f"[{trigger_type}] goal={inferred_goal} decision={decision}"
+        if action_summary:
+            text += f" result={action_summary}"
+        try:
+            memory_index.upsert_memory(
+                memory_id=row_id,
+                text=text,
+                project_id=project_id,
+                user_id=user_id,
+                tier="episodic",
+                role="assistant",
+                created_at=int(time.time()),
+            )
+        except Exception:
+            log.debug("episodic semantic index failed (non-fatal): user=%s", user_id)
+    return row_id
 
 
 def _update_episodic_outcome(episodic_id: str, outcome: str) -> None:
@@ -1235,6 +1261,7 @@ async def _run_proactive_agent(
             "silence",
             f"self-suppressed: domain_confidence={_domain_conf:.2f}",
             repo_root=workdir,
+            project_id=project_id or "",
         )
         log.info(
             "rawos: self-suppressed user=%s domain=%s conf=%.2f",
@@ -1255,6 +1282,7 @@ async def _run_proactive_agent(
             _log_episodic(
                 user_id, trigger_type or "", intent_obj.domain, intent_obj.goal,
                 "silence", "entity-probe: no watched repo with recent activity",
+                project_id=project_id or "",
             )
             log.info("rawos entity-probe: no target — SILENCE user=%s", user_id)
             return
@@ -1449,6 +1477,7 @@ async def _run_proactive_agent(
         result_text[:500] if _decision != "SILENCE" else None,
         repo_root=workdir,
         self_confidence=_confidence,
+        project_id=project_id or "",
     )
 
     if _decision == "SILENCE":
@@ -1968,3 +1997,57 @@ async def _run_self_probe_cycle() -> None:
     finally:
         await remove_worktree(worktree_path)
         log.info("self-probe: worktree cleaned up — %s", worktree_path)
+
+
+# ---------------------------------------------------------------------------
+# Seam B — Narrative consolidation: being writes its own continuous self-narrative
+# ---------------------------------------------------------------------------
+
+async def _run_narrative_consolidation_cycle() -> None:
+    """One consolidation cycle: read recent autonomous episodic history,
+    call write_self_narrative, persist result.
+
+    Non-fatal: any exception is logged and swallowed — the loop must survive.
+    """
+    try:
+        prior = db.get_self_narrative(RAWOS_ENTITY_USER_ID) or ""
+        with db._conn() as conn:
+            rows = conn.execute(
+                """SELECT trigger_type, domain, inferred_goal, decision,
+                          action_summary, outcome, self_confidence, ts
+                   FROM episodic_memory
+                   WHERE user_id = ?
+                   ORDER BY ts DESC
+                   LIMIT 40""",
+                (RAWOS_ENTITY_USER_ID,),
+            ).fetchall()
+        episodic_history = [dict(r) for r in rows]
+        from rawos.context.user_model import get_user_model as _get_user_model
+        user_model_row = _get_user_model(RAWOS_ENTITY_USER_ID) or {}
+        new_narrative = await write_self_narrative(
+            prior, user_model_row, episodic_history
+        )
+        if new_narrative:
+            db.set_self_narrative(RAWOS_ENTITY_USER_ID, new_narrative)
+            log.info("narrative_consolidation: narrative updated (%d chars)", len(new_narrative))
+        else:
+            log.info("narrative_consolidation: LLM returned empty — prior preserved")
+    except Exception:
+        log.exception("narrative_consolidation: cycle error (non-fatal)")
+
+
+async def rawos_narrative_consolidation_loop() -> None:
+    """Periodic loop that consolidates the being's autonomous episodic history
+    into a coherent self-narrative.
+
+    Gated by settings.narrative_consolidation_enabled (default False — activate
+    once Seam A has accumulated sufficient episodic history).
+    """
+    if not settings.narrative_consolidation_enabled:
+        log.info("narrative_consolidation: disabled — loop exits immediately")
+        return
+    interval = settings.narrative_consolidation_interval_s
+    log.info("narrative_consolidation: loop started (interval=%ds)", interval)
+    while True:
+        await _run_narrative_consolidation_cycle()
+        await asyncio.sleep(interval)

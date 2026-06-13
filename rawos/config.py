@@ -81,6 +81,10 @@ class Settings(BaseSettings):
     # Phase 16 — self-modification
     self_probe_enabled: bool = True   # enabled 2026-06-12 after manual worktree cycle proof (commit c97781cc)
 
+    # Phase 19 — narrative consolidation (Close the Living Loop)
+    narrative_consolidation_enabled: bool = False
+    narrative_consolidation_interval_s: int = 86400
+
     # Stage 3 ("Earned, Reversible Autonomy") — graduated auto-apply
     autonomy_auto_apply_enabled: bool = False   # dormant until a (repo, anomaly_domain)
 
