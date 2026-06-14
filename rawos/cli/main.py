@@ -15,6 +15,7 @@ Config stored at ~/.rawos/credentials.json
 """
 from __future__ import annotations
 
+import base64
 import json
 import os
 import sys
@@ -49,6 +50,56 @@ def _save_creds(data: dict) -> None:
     _CREDS_FILE.write_text(json.dumps(data, indent=2))
     _CREDS_FILE.chmod(0o600)
 
+
+def _decode_jwt_exp(token: str) -> float | None:
+    """Decode JWT expiry timestamp from payload without verifying signature."""
+    try:
+        payload_b64 = token.split(".")[1]
+        payload_b64 += "=" * (4 - len(payload_b64) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(payload_b64))
+        return float(payload["exp"])
+    except Exception:
+        return None
+
+
+def _refresh_if_expired(creds: dict) -> dict:
+    """Auto-refresh access_token when expired or within 5 minutes of expiry.
+
+    Returns updated creds (saved to disk) on success, original dict on failure.
+    Requires rawos service to be reachable — only call when healthy=True.
+    """
+    refresh_token = creds.get("refresh_token", "")
+    if not refresh_token:
+        return creds
+
+    access_token = creds.get("access_token", "")
+    needs_refresh = not access_token
+    if not needs_refresh:
+        exp = _decode_jwt_exp(access_token)
+        needs_refresh = exp is None or exp <= time.time() + 300
+
+    if not needs_refresh:
+        return creds
+
+    try:
+        resp = httpx.post(
+            _DEFAULT_URL.rstrip("/") + "/auth/refresh",
+            json={"refresh_token": refresh_token},
+            timeout=5.0,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            new_creds = {
+                "email": creds.get("email", ""),
+                "access_token": data["access_token"],
+                "refresh_token": data["refresh_token"],
+            }
+            _save_creds(new_creds)
+            return new_creds
+    except Exception:
+        pass
+
+    return creds
 
 def _get_token() -> str:
     creds = _load_creds()
@@ -1576,7 +1627,6 @@ def frontdoor_enter() -> None:
 
     ssh_cmd = os.environ.get("SSH_ORIGINAL_COMMAND", "")
     creds = _load_creds()
-    has_token = bool(creds.get("access_token", ""))
 
     # Probe /health — fail-open: if probe itself fails, mark unhealthy
     try:
@@ -1587,6 +1637,11 @@ def frontdoor_enter() -> None:
         rawos_healthy = resp.status_code == 200
     except Exception:
         rawos_healthy = False
+
+    # Auto-refresh expired token if service is reachable
+    if rawos_healthy:
+        creds = _refresh_if_expired(creds)
+    has_token = bool(creds.get("access_token", ""))
 
     audit_dir = _CONFIG_DIR / "audit"
     audit_dir.mkdir(parents=True, exist_ok=True)
