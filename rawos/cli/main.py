@@ -1798,9 +1798,17 @@ def frontdoor_revert(snapshot: str) -> None:
 
 @cli.command("setup")
 @click.option("--base-dir", required=True, help="Directory where rawos will be installed")
-@click.option("--openai-key", required=True, help="OpenAI API key")
-@click.option("--telegram-token", required=True, help="Telegram bot token")
-@click.option("--telegram-owner-id", required=True, help="Telegram owner user ID")
+@click.option("--llm-api-key", required=True, help="LLM provider API key")
+@click.option("--llm-agent-model", required=True, help="Model id for the agent/reasoning path")
+@click.option("--llm-summarizer-model", required=True, help="Model id for the summarizer/compression path")
+@click.option("--llm-fallback-model", default="", show_default=True, help="Model id for 429-fallback")
+@click.option("--llm-base-url", default="https://api.deepseek.com/v1", show_default=True, help="LLM provider base URL")
+@click.option("--llm-timeout-s", default=120, show_default=True, help="LLM request timeout (seconds)")
+@click.option("--telegram-owner-email", required=True, help="Owner account email (resolves owner identity for autonomous loops)")
+@click.option("--telegram-enabled", is_flag=True, default=False, help="Enable the Telegram window")
+@click.option("--telegram-bot-token", default="", help="Telegram bot token")
+@click.option("--telegram-owner-chat-id", default=0, show_default=True, help="Telegram owner chat id")
+@click.option("--source-root", default=None, help="Path to the rawos source tree (default: --base-dir)")
 @click.option("--exec-start", required=True, help="ExecStart path for the systemd unit")
 @click.option("--port", default=8002, show_default=True, help="Port rawos listens on")
 @click.option("--name", default="rawos", show_default=True, help="Service unit name")
@@ -1809,9 +1817,17 @@ def frontdoor_revert(snapshot: str) -> None:
 @click.option("--force", is_flag=True, default=False, help="Overwrite existing .env")
 def setup(
     base_dir: str,
-    openai_key: str,
-    telegram_token: str,
-    telegram_owner_id: str,
+    llm_api_key: str,
+    llm_agent_model: str,
+    llm_summarizer_model: str,
+    llm_fallback_model: str,
+    llm_base_url: str,
+    llm_timeout_s: int,
+    telegram_owner_email: str,
+    telegram_enabled: bool,
+    telegram_bot_token: str,
+    telegram_owner_chat_id: int,
+    source_root: str | None,
     exec_start: str,
     port: int,
     name: str,
@@ -1825,9 +1841,17 @@ def setup(
     click.echo(f"Created directories under {base_dir}")
 
     wizard.write_env(
-        openai_api_key=openai_key,
-        telegram_token=telegram_token,
-        telegram_owner_id=telegram_owner_id,
+        llm_api_key=llm_api_key,
+        llm_agent_model=llm_agent_model,
+        llm_summarizer_model=llm_summarizer_model,
+        llm_fallback_model=llm_fallback_model,
+        llm_base_url=llm_base_url,
+        llm_timeout_s=llm_timeout_s,
+        telegram_owner_email=telegram_owner_email,
+        telegram_enabled=telegram_enabled,
+        telegram_bot_token=telegram_bot_token,
+        telegram_owner_chat_id=telegram_owner_chat_id,
+        source_root=source_root,
         port=port,
         force=force,
     )
