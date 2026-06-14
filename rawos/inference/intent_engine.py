@@ -24,6 +24,7 @@ from typing import Any
 import rawos.db as db
 from rawos.config import settings
 from rawos.context.user_model import get_user_model, rebuild_user_model
+from rawos.kernel import llm_client
 
 log = logging.getLogger("rawos.inference.intent_engine")
 
@@ -180,9 +181,7 @@ Rules:
 
 
 async def _llm_infer(model: dict[str, Any]) -> InferredIntent:
-    """LLM-based inference. Calls DeepSeek with user model summary."""
-    import httpx
-
+    """LLM-based inference. Calls configured LLM provider with user model summary."""
     stack = model.get("inferred_stack", [])
     domains = model.get("active_domains", [])
     recent = model.get("recent_activity", [])
@@ -205,27 +204,17 @@ async def _llm_infer(model: dict[str, Any]) -> InferredIntent:
     )
 
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.post(
-                f"{settings.deepseek_base_url}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {settings.deepseek_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": settings.deepseek_model_fast,
-                    "messages": [
-                        {"role": "system", "content": _LLM_SYSTEM},
-                        {"role": "user", "content": user_context},
-                    ],
-                    "max_tokens": 500,
-                    "temperature": 0.1,
-                },
-            )
-        resp.raise_for_status()
-        data = resp.json()
-        _log_usage(settings.deepseek_model_fast, data.get("usage", {}))
-        content = data["choices"][0]["message"]["content"].strip()
+        content, usage = await llm_client.complete(
+            [
+                {"role": "system", "content": _LLM_SYSTEM},
+                {"role": "user", "content": user_context},
+            ],
+            model=settings.llm_summarizer_model,
+            max_tokens=500,
+            temperature=0.1,
+        )
+        _log_usage(settings.llm_summarizer_model, usage)
+        content = content.strip()
         # Strip code fences if model adds them despite instructions
         if content.startswith("```"):
             content = content.split("\n", 1)[1].rsplit("```", 1)[0].strip()

@@ -23,11 +23,9 @@ import mimetypes
 from pathlib import Path
 from typing import Any, AsyncIterator
 
-import httpx
-
 import rawos.db as db
 from rawos.config import settings
-from rawos.kernel import billing_context
+from rawos.kernel import billing_context, llm_client
 from rawos.kernel.tools import TOOL_DEFINITIONS, execute as execute_tool
 
 log = logging.getLogger("rawos.agent_loop")
@@ -142,9 +140,8 @@ async def _compress_working_messages(working_messages: list[dict]) -> list[dict]
     history_text = "\n".join(lines)
 
     try:
-        payload = {
-            "model": settings.deepseek_model_fast,
-            "messages": [
+        content, _usage = await llm_client.complete(
+            [
                 {
                     "role": "system",
                     "content": (
@@ -160,22 +157,11 @@ async def _compress_working_messages(working_messages: list[dict]) -> list[dict]
                     "content": f"Compress:\n\n{history_text[:15000]}",
                 },
             ],
-            "max_tokens": 800,
-            "temperature": 0.1,
-            "stream": False,
-        }
-        async with httpx.AsyncClient(timeout=25.0) as client:
-            resp = await client.post(
-                f"{settings.deepseek_base_url}/chat/completions",
-                json=payload,
-                headers={
-                    "Authorization": f"Bearer {settings.deepseek_key}",
-                    "Content-Type": "application/json",
-                },
-            )
-        if resp.status_code != 200:
-            return working_messages
-        summary = resp.json()["choices"][0]["message"]["content"].strip()
+            model=settings.llm_summarizer_model,
+            max_tokens=800,
+            temperature=0.1,
+        )
+        summary = content.strip()
     except Exception:
         log.debug("context compression failed (non-fatal)", exc_info=True)
         return working_messages
@@ -216,37 +202,16 @@ async def _llm_tool_call(
     tool_definitions: list[dict] | None = None,
 ) -> dict:
     """Non-streaming LLM call for tool selection. Returns the full message dict."""
-    if not settings.deepseek_key:
-        raise RuntimeError("DEEPSEEK_KEY not configured")
-
     active_tools = tool_definitions if tool_definitions is not None else TOOL_DEFINITIONS
-    payload = {
-        "model": model,
-        "messages": [{"role": "system", "content": system_prompt or _SYSTEM_PROMPT}] + messages,
-        "tools": active_tools,
-        "tool_choice": "auto",
-        "stream": False,
-        "max_tokens": 4096,
-    }
-    headers = {
-        "Authorization": f"Bearer {settings.deepseek_key}",
-        "Content-Type": "application/json",
-    }
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        resp = await client.post(
-            f"{settings.deepseek_base_url}/chat/completions",
-            json=payload,
-            headers=headers,
-        )
-        if resp.status_code != 200:
-            body = resp.text[:300]
-            raise RuntimeError(f"DeepSeek {resp.status_code}: {body}")
-        data = resp.json()
-
-    usage = data.get("usage", {})
+    message, usage = await llm_client.tool_call(
+        messages,
+        tools=active_tools,
+        model=model,
+        system_prompt=system_prompt or _SYSTEM_PROMPT,
+        max_tokens=4096,
+    )
     _log_usage(model, usage)
-
-    return data["choices"][0]["message"]
+    return message
 
 
 async def _llm_stream_final(
@@ -255,48 +220,19 @@ async def _llm_stream_final(
     system_prompt: str | None = None,
 ) -> AsyncIterator[str]:
     """Streaming LLM call for the final answer (no tools)."""
-    if not settings.deepseek_key:
-        raise RuntimeError("DEEPSEEK_KEY not configured")
-
-    payload = {
-        "model": model,
-        "messages": [{"role": "system", "content": system_prompt or _SYSTEM_PROMPT}] + messages,
-        "stream": True,
-        "max_tokens": 4096,
-    }
-    headers = {
-        "Authorization": f"Bearer {settings.deepseek_key}",
-        "Content-Type": "application/json",
-    }
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        async with client.stream(
-            "POST",
-            f"{settings.deepseek_base_url}/chat/completions",
-            json=payload,
-            headers=headers,
-        ) as resp:
-            if resp.status_code != 200:
-                body = await resp.aread()
-                raise RuntimeError(f"DeepSeek stream {resp.status_code}: {body[:200]}")
-            async for line in resp.aiter_lines():
-                if not line.startswith("data: "):
-                    continue
-                data = line[6:]
-                if data.strip() == "[DONE]":
-                    return
-                try:
-                    chunk = json.loads(data)
-                    text = chunk["choices"][0]["delta"].get("content") or ""
-                    if text:
-                        yield text
-                except (json.JSONDecodeError, KeyError, IndexError):
-                    continue
+    async for chunk in llm_client.stream_final(
+        messages,
+        model=model,
+        system_prompt=system_prompt or _SYSTEM_PROMPT,
+        max_tokens=4096,
+    ):
+        yield chunk
 
 
 # Verified DeepSeek pricing (USD per 1M tokens). Models not listed here have
 # unverified pricing — cost is reported as None rather than fabricated.
 _PRICING_USD_PER_M = {
-    "deepseek-v4-pro": {"cache_hit": 0.003625, "cache_miss": 0.435, "output": 0.87},
+    "deepseek-chat": {"cache_hit": 0.003625, "cache_miss": 0.435, "output": 0.87},
 }
 
 

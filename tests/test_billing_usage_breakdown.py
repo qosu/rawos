@@ -27,7 +27,7 @@ def test_compute_cost_usd_micros_known_model():
         "prompt_cache_miss_tokens": 1_000_000,
         "completion_tokens": 1_000_000,
     }
-    cost = _compute_cost_usd_micros("deepseek-v4-pro", usage)
+    cost = _compute_cost_usd_micros("deepseek-chat", usage)
     assert cost == round(0.003625 * 1_000_000 + 0.435 * 1_000_000 + 0.87 * 1_000_000)
 
 
@@ -47,7 +47,7 @@ def test_log_usage_without_context_does_not_write_billing_event():
         "prompt_cache_miss_tokens": 40,
         "completion_tokens": 20,
     }
-    _log_usage("deepseek-v4-pro", usage)
+    _log_usage("deepseek-chat", usage)
     assert db.get_billing_events("any-user") == []
 
 
@@ -60,7 +60,7 @@ def test_log_usage_with_context_writes_billing_event_with_breakdown():
         "completion_tokens": 20,
     }
     with billing_context.set_billing_context(user_id=user.id, intent_id="intent-1", event_type="server_scan"):
-        _log_usage("deepseek-v4-pro", usage)
+        _log_usage("deepseek-chat", usage)
 
     events = db.get_billing_events(user.id)
     assert len(events) == 1

@@ -26,18 +26,15 @@ import logging
 import time
 from typing import Any, AsyncIterator
 
-import httpx
-
 from rawos.config import settings
 from rawos.models import Agent, AgentStatus, Event, EventType, MemoryTier, MessageRole, Memory
 import rawos.db as db
-from rawos.kernel import agent_loop
+from rawos.kernel import agent_loop, llm_client
 from rawos.kernel.specialized_agents import get_tool_definitions, get_system_prompt
 
 log = logging.getLogger("rawos.orchestrator")
 
 _DONE_SENTINEL = "__agent_done__"
-_CLASSIFY_TIMEOUT = 30.0   # seconds for the classify call
 _AGENT_TIMEOUT    = 300.0  # seconds max per sub-agent
 
 _DECOMPOSE_PROMPT = """\
@@ -76,45 +73,30 @@ async def _classify_intent(
     model: str,
 ) -> dict:
     """
-    Ask DeepSeek whether to handle directly or spawn sub-agents.
+    Ask the configured LLM provider whether to handle directly or spawn sub-agents.
     Returns {"mode": "direct"} or {"mode": "multi", "tasks": [...]}.
     Falls back to {"mode": "direct"} on any error.
     """
-    if not settings.deepseek_key:
+    if not settings.llm_api_key:
         return {"mode": "direct"}
 
-    payload = {
-        "model": model,
-        "messages": [
-            {"role": "system", "content": _DECOMPOSE_PROMPT},
-        ] + messages[-6:],   # last 6 messages = sufficient context, cheap
-        "stream": False,
-        "max_tokens": 1024,
-        "temperature": 0.0,
-    }
-    headers = {
-        "Authorization": f"Bearer {settings.deepseek_key}",
-        "Content-Type": "application/json",
-    }
     try:
-        async with httpx.AsyncClient(timeout=_CLASSIFY_TIMEOUT) as client:
-            resp = await client.post(
-                f"{settings.deepseek_base_url}/chat/completions",
-                json=payload,
-                headers=headers,
-            )
-            if resp.status_code != 200:
-                log.warning("classify call failed %d", resp.status_code)
-                return {"mode": "direct"}
-            data = resp.json()
-            raw = data["choices"][0]["message"]["content"].strip()
-            plan = json.loads(raw)
-            if plan.get("mode") not in ("direct", "multi"):
-                return {"mode": "direct"}
-            tasks = plan.get("tasks", [])
-            if plan["mode"] == "multi" and not (1 <= len(tasks) <= settings.max_parallel_agents):
-                return {"mode": "direct"}
-            return plan
+        content, _usage = await llm_client.complete(
+            [
+                {"role": "system", "content": _DECOMPOSE_PROMPT},
+            ] + messages[-6:],   # last 6 messages = sufficient context, cheap
+            model=model,
+            max_tokens=1024,
+            temperature=0.0,
+        )
+        raw = content.strip()
+        plan = json.loads(raw)
+        if plan.get("mode") not in ("direct", "multi"):
+            return {"mode": "direct"}
+        tasks = plan.get("tasks", [])
+        if plan["mode"] == "multi" and not (1 <= len(tasks) <= settings.max_parallel_agents):
+            return {"mode": "direct"}
+        return plan
     except Exception as e:
         log.warning("classify intent error: %s — falling back to direct", e)
         return {"mode": "direct"}

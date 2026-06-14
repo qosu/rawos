@@ -158,7 +158,7 @@ async def _run_orchestration(
     _intent_start = time.perf_counter()
     monitoring.active_sse_connections.inc()
 
-    chosen_model = model or settings.deepseek_model_pro
+    chosen_model = model or settings.llm_agent_model
     error_occurred = False
     response_chunks: list[str] = []
     user_mem_id: str | None = None

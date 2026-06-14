@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 import rawos.db as db
-from rawos.kernel import agent_loop
+from rawos.kernel import agent_loop, llm_client
 from rawos.kernel.tools import TOOL_DEFINITIONS
 from rawos.kernel.worktree import create_worktree, get_head_sha, remove_worktree
 from rawos.kernel.anomaly_verifier import VERIFIABLE_ANOMALY_KINDS, verify_fix
@@ -699,7 +699,6 @@ async def _generate_code_fix(
     Writes RAWOS_fix_*.{ext} to workdir and records as action_type='draft'.
     """
     from rawos.manifester.writer import manifest_code_fix
-    import httpx as _httpx
 
     target_file = trigger_ctx.get("file", "")
     if not target_file or not Path(target_file).exists():
@@ -728,26 +727,16 @@ async def _generate_code_fix(
     )
 
     try:
-        async with _httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.post(
-                f"{settings.deepseek_base_url}/chat/completions",
-                headers={
-                    "Authorization": "Bearer " + settings.deepseek_key,
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": settings.deepseek_model_pro,
-                    "messages": [
-                        {"role": "system", "content": _CODE_FIX_SYSTEM_PROMPT},
-                        {"role": "user",   "content": fix_prompt},
-                    ],
-                    "max_tokens": 4096,
-                    "temperature": 0.1,
-                    "stream": False,
-                },
-            )
-        resp.raise_for_status()
-        corrected = resp.json()["choices"][0]["message"]["content"].strip()
+        corrected, _usage = await llm_client.complete(
+            [
+                {"role": "system", "content": _CODE_FIX_SYSTEM_PROMPT},
+                {"role": "user",   "content": fix_prompt},
+            ],
+            model=settings.llm_agent_model,
+            max_tokens=4096,
+            temperature=0.1,
+        )
+        corrected = corrected.strip()
     except Exception:
         log.exception("_generate_code_fix: LLM call failed for user=%s", user_id)
         return
@@ -1107,7 +1096,7 @@ async def _run_proactive_loop(
         async for event in agent_loop.run(
             messages=messages,
             workdir=workdir,
-            model=settings.deepseek_model_pro,
+            model=settings.llm_agent_model,
             intent_id=intent_rec.id,
             user_id=user_id,
             system_prompt=system_prompt,
@@ -1336,15 +1325,14 @@ async def _run_proactive_agent(
     agent_rec = Agent(
         user_id=user_id, project_id=project_id,
         goal=f"[proactive] {intent_obj.goal[:180]}",
-        model=settings.deepseek_model_pro,
+        model=settings.llm_agent_model,
     )
     agent_rec = agent_rec.transition(AgentStatus.ACTIVE)
     db.create_agent(agent_rec)
 
-    # DIRECT_LLM_PROACTIVE: bypass orchestrator, direct DeepSeek API call, no tools.
+    # DIRECT_LLM_PROACTIVE: bypass orchestrator, direct LLM API call, no tools.
     # Tools cause DSML markup in output; without tools the model writes pure markdown.
     from rawos.context.user_model import get_user_model
-    import httpx
 
     user_model_data = get_user_model(user_id) or {}
     stack   = user_model_data.get("inferred_stack") or []
@@ -1971,7 +1959,7 @@ async def _run_self_probe_cycle() -> None:
             user_id=RAWOS_ENTITY_USER_ID,
             project_id=RAWOS_ENTITY_PROJECT_ID,
             goal=f"[self-probe] {goal[:180]}",
-            model=settings.deepseek_model_pro,
+            model=settings.llm_agent_model,
         )
         agent_rec = agent_rec.transition(AgentStatus.ACTIVE)
         db.create_agent(agent_rec)
@@ -1982,7 +1970,7 @@ async def _run_self_probe_cycle() -> None:
             async for event in agent_loop.run(
                 messages=messages,
                 workdir=worktree_path,
-                model=settings.deepseek_model_pro,
+                model=settings.llm_agent_model,
                 intent_id=intent_rec.id,
                 user_id=RAWOS_ENTITY_USER_ID,
                 system_prompt=_SELF_PROBE_SYSTEM_PROMPT,

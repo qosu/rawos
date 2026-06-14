@@ -16,10 +16,9 @@ import asyncio
 import json
 import logging
 
-import aiohttp
-
 from rawos.config import settings
 from rawos.dataset.schema import BehavioralContext, DatasetExample, VALID_DOMAINS
+from rawos.kernel import llm_client
 
 log = logging.getLogger("rawos.dataset.synthetic")
 
@@ -77,24 +76,13 @@ Output ONLY a valid JSON array with no markdown, no code fences, no explanation:
 
 
 async def _call_deepseek(prompt: str, temperature: float = 0.8) -> str:
-    async with aiohttp.ClientSession() as session:
-        async with session.post(
-            f"{settings.deepseek_base_url}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {settings.deepseek_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": settings.deepseek_model_fast,
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": temperature,
-                "max_tokens": 4096,
-            },
-            timeout=aiohttp.ClientTimeout(total=120),
-        ) as resp:
-            resp.raise_for_status()
-            data = await resp.json()
-            return data["choices"][0]["message"]["content"].strip()
+    content, _usage = await llm_client.complete(
+        [{"role": "user", "content": prompt}],
+        model=settings.llm_summarizer_model,
+        max_tokens=4096,
+        temperature=temperature,
+    )
+    return content.strip()
 
 
 def _parse_examples(raw: str, domain: str) -> list[DatasetExample]:

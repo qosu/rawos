@@ -1,6 +1,5 @@
 """
 rawos Summarizer — compress old episodic memories into compact semantic summaries.
-Uses Groq (fast, cheap) if available, falls back to DeepSeek.
 Internal use only — never user-facing.
 """
 from __future__ import annotations
@@ -9,6 +8,7 @@ import json
 import logging
 
 from rawos.config import settings
+from rawos.kernel import llm_client
 from rawos.models import Memory
 
 log = logging.getLogger("rawos.summarizer")
@@ -45,77 +45,20 @@ async def summarize_memories(memories: list[Memory]) -> str:
 
 async def _complete(system_prompt: str, user_text: str) -> str:
     """
-    Shared internal LLM completion: Groq (fast/cheap) first, DeepSeek fallback.
-    Returns empty string if both fail. Internal use only — never user-facing.
+    Shared internal LLM completion. Returns empty string on any failure.
+    Internal use only — never user-facing.
     """
-    # Try Groq first (fast + cheap for internal tasks)
-    if settings.groq_keys:
-        result = await _groq_complete(system_prompt, user_text)
-        if result:
-            return result
-
-    # Fallback to DeepSeek
-    return await _deepseek_complete(system_prompt, user_text)
-
-
-async def _groq_complete(system_prompt: str, user_text: str) -> str:
     try:
-        import groq as _groq
-        import asyncio
-
-        key = settings.groq_keys[0]
-        client = _groq.Groq(api_key=key)
-
-        # Groq client is sync — run in executor to not block event loop
-        loop = asyncio.get_event_loop()
-
-        def _call():
-            resp = client.chat.completions.create(
-                model="llama-3.1-8b-instant",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user",   "content": user_text[:12_000]},
-                ],
-                max_tokens=512,
-                temperature=0.3,
-            )
-            return resp.choices[0].message.content or ""
-
-        return await loop.run_in_executor(None, _call)
-
-    except Exception as e:
-        log.warning("groq completion failed: %s", e)
-        return ""
-
-
-async def _deepseek_complete(system_prompt: str, user_text: str) -> str:
-    try:
-        import httpx
-
-        payload = {
-            "model": settings.deepseek_model_fast,
-            "messages": [
+        content, _usage = await llm_client.complete(
+            [
                 {"role": "system", "content": system_prompt},
                 {"role": "user",   "content": user_text[:12_000]},
             ],
-            "stream": False,
-            "max_tokens": 512,
-            "temperature": 0.3,
-        }
-        headers = {
-            "Authorization": f"Bearer {settings.deepseek_key}",
-            "Content-Type": "application/json",
-        }
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(
-                f"{settings.deepseek_base_url}/chat/completions",
-                json=payload, headers=headers,
-            )
-            if resp.status_code != 200:
-                return ""
-            data = resp.json()
-            return data["choices"][0]["message"]["content"] or ""
-
+            model=settings.llm_summarizer_model,
+            max_tokens=512,
+            temperature=0.3,
+        )
+        return content or ""
     except Exception as e:
-        log.warning("deepseek completion failed: %s", e)
+        log.warning("llm completion failed: %s", e)
         return ""

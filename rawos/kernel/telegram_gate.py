@@ -132,7 +132,7 @@ class TelegramGate:
         from rawos.kernel.billing_context import set_billing_context
 
         intent_id = str(uuid.uuid4())
-        model = settings.deepseek_model_pro
+        model = settings.llm_agent_model
 
         messages, system_ctx = context_builder.build_context(user_id, project_id, raw_message)
         # context_builder appends the user message; remove if already there to avoid duplication
