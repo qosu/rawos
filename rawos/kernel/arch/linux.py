@@ -6,6 +6,7 @@ kernel/sandbox.py — Stage A is a zero-behavior-change extraction.
 """
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -389,3 +390,64 @@ class LinuxFileOperator:
             raise FileOperatorRefusalError(
                 f"refused: {normalized} is within rawos's own source tree ({rawos_root})"
             )
+
+
+# Phase 24a — eBPF kernel perception probe script.
+#
+# Two probes, both observe-only:
+#   - tracepoint:syscalls:sys_enter_execve — every process exec, machine-wide.
+#     `comm` here is the CALLING process's name (pre-exec image); `path` is the
+#     binary being exec'd, which is the useful signal.
+#   - kprobe:tcp_connect — every outbound TCP connect, machine-wide. `dport` is
+#     byte-swapped from network order (reliable); `daddr` may read "0.0.0.0" if
+#     the kprobe fires before route resolution completes (kernel timing, not a
+#     bug in this script) — comm/pid/dport remain meaningful in that case.
+#
+# `-f json` wraps each printf in {"type": "printf", "data": "<our JSON string>"}.
+# parse_event() unwraps that envelope; lines whose payload fails to parse as
+# JSON (e.g. a process/path name containing an unescaped quote) are dropped,
+# never raised.
+_KERNEL_PERCEPTION_SCRIPT = r'''
+tracepoint:syscalls:sys_enter_execve
+{
+    printf("{\"event_type\":\"execve\",\"comm\":\"%s\",\"pid\":%d,\"path\":\"%s\"}\n", comm, pid, str(args->filename));
+}
+
+kprobe:tcp_connect
+{
+    $sk = (struct sock *)arg0;
+    $daddr = ntop($sk->__sk_common.skc_daddr);
+    $rport = $sk->__sk_common.skc_dport;
+    $dport = (($rport & 0xff) << 8) | (($rport >> 8) & 0xff);
+    printf("{\"event_type\":\"tcp_connect\",\"comm\":\"%s\",\"pid\":%d,\"daddr\":\"%s\",\"dport\":%d}\n", comm, pid, $daddr, $dport);
+}
+'''
+
+
+class LinuxKernelObserver:
+    """Linux implementation of KernelObserver — bpftrace subprocess emitting JSONL.
+
+    Requires the `bpftrace` binary (apt package `bpftrace`) and CAP_BPF/root,
+    which rawos already runs as. Read-only: the probes only printf, never
+    write/deny anything.
+    """
+
+    supports_kernel_observation = True
+
+    def probe_command(self) -> list[str]:
+        return ["bpftrace", "-f", "json", "-e", _KERNEL_PERCEPTION_SCRIPT]
+
+    def parse_event(self, line: str) -> dict | None:
+        try:
+            outer = json.loads(line)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(outer, dict) or outer.get("type") != "printf":
+            return None
+        try:
+            inner = json.loads(outer["data"])
+        except (json.JSONDecodeError, TypeError, KeyError):
+            return None
+        if not isinstance(inner, dict):
+            return None
+        return inner

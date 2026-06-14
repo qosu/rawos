@@ -268,3 +268,20 @@ class WindowsFileOperator:
 
     def restore(self, snapshot) -> None:
         raise NotImplementedError("file operator backend not yet implemented for Windows")
+
+
+class WindowsKernelObserver:
+    """Windows kernel-observer backend — NOT YET IMPLEMENTED.
+
+    supports_kernel_observation = False: the Phase 24a perception loop checks
+    this flag and no-ops on Windows. The Protocol seam exists; this stub makes
+    the gap explicit rather than hidden, mirroring WindowsFileOperator.
+    """
+
+    supports_kernel_observation = False
+
+    def probe_command(self) -> list[str]:
+        raise NotImplementedError("kernel observer backend not yet implemented for Windows")
+
+    def parse_event(self, line: str) -> dict | None:
+        raise NotImplementedError("kernel observer backend not yet implemented for Windows")

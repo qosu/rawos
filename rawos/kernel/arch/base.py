@@ -209,3 +209,26 @@ class FileOperator(Protocol):
         Raises FileOperatorRefusalError for self-protected paths.
         """
         ...
+
+
+class KernelObserver(Protocol):
+    """OS-specific mechanism for the being's kernel-level perception (Phase 24a).
+
+    Read-only, machine-wide: probe_command() returns the argv of a subprocess
+    that streams kernel events (process execution, outbound network connections)
+    as JSON lines on stdout — observe only, never gates or denies anything.
+    parse_event() normalizes one stdout line into an event dict, or returns
+    None for non-event/malformed lines. Must never raise.
+    """
+
+    supports_kernel_observation: bool
+
+    def probe_command(self) -> list[str]:
+        """Return the argv of a subprocess that streams kernel events as JSON lines."""
+        ...
+
+    def parse_event(self, line: str) -> dict | None:
+        """Parse one stdout line into a normalized event dict, or None if the
+        line carries no perception event (control message or malformed)."""
+        ...
+        ...

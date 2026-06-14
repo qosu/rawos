@@ -74,6 +74,7 @@ async def lifespan(app: FastAPI):
     narrative_task     = asyncio.create_task(_start_narrative_consolidation_loop(), name="narrative-consolidation")
     operator_scan_task       = asyncio.create_task(_start_operator_scan_loop(),          name="operator-scan")
     system_fs_reflex_task = asyncio.create_task(_start_system_fs_reflex(),              name="system-fs-reflex")
+    kernel_perception_task = asyncio.create_task(_start_kernel_perception_loop(),       name="kernel-perception")
     _telegram_gate     = await _start_telegram_gate()
 
     # Clean up intents orphaned by crash/restart — any still 'executing' after
@@ -102,7 +103,8 @@ async def lifespan(app: FastAPI):
     narrative_task.cancel()
     operator_scan_task.cancel()
     system_fs_reflex_task.cancel()
-    await asyncio.gather(db_sync_task, proactive_task, watcher_task, snapshot_task, calendar_task, autonomous_task, self_probe_task, narrative_task, operator_scan_task, system_fs_reflex_task, return_exceptions=True)
+    kernel_perception_task.cancel()
+    await asyncio.gather(db_sync_task, proactive_task, watcher_task, snapshot_task, calendar_task, autonomous_task, self_probe_task, narrative_task, operator_scan_task, system_fs_reflex_task, kernel_perception_task, return_exceptions=True)
     stop_system_perception()
     stop_filesystem_watcher()
     _log.info("rawos shutdown complete")
@@ -124,6 +126,11 @@ async def _start_proactive_scheduler() -> None:
 async def _start_system_fs_reflex() -> None:
     from rawos.scheduler.system_reflex import system_fs_reflex_loop
     await system_fs_reflex_loop()
+
+
+async def _start_kernel_perception_loop() -> None:
+    from rawos.context.kernel_perception import kernel_perception_loop
+    await kernel_perception_loop()
 
 
 async def _start_autonomous_scan() -> None:

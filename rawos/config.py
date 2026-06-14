@@ -107,6 +107,12 @@ class Settings(BaseSettings):
     system_fs_reflex_interval_s: int = 30
     system_fs_reflex_lookback_s: int = 90
 
+    # Phase 24a — eBPF kernel perception (read-only, machine-wide)
+    ebpf_perception_enabled: bool = False
+    ebpf_perception_comm_denylist: tuple[str, ...] = ()
+    ebpf_perception_debounce_s: float = 1.0
+    ebpf_perception_respawn_backoff_s: float = 5.0
+
     # Milestone 4 (\The window\) — Telegram front-door
     telegram_enabled:        bool = False
     telegram_bot_token:      str  = ""
