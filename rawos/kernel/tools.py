@@ -775,17 +775,151 @@ async def _manage_file(params: dict[str, Any], workdir: str) -> ToolResult:
         success=False, duration_ms=_ms(),
     )
 
+async def _manage_service(params: dict[str, Any], workdir: str) -> ToolResult:
+    """Managed service lifecycle (R2 operator path): allowlist mgmt + propose/apply lifecycle."""
+    import time as _time
+    import rawos.db as _db
+    from rawos.kernel.billing_context import get_billing_context
+    from rawos.kernel.operator import (
+        OperatorError,
+        ServiceOperatorRefusalError,
+        operate_on_service,
+        execute_approved_service_action,
+    )
+
+    ctx = get_billing_context()
+    if ctx is None:
+        return ToolResult(output="manage_service: no active agent context", success=False, duration_ms=0)
+    user_id: str = ctx["user_id"]
+
+    action = params.get("action", "")
+    service_name: str = params.get("service_name", "")
+    t0 = _time.monotonic()
+
+    def _ms() -> int:
+        return int((_time.monotonic() - t0) * 1000)
+
+    if action == "add_target":
+        validator_cmd: str = params.get("validator_cmd", "")
+        if not service_name or not validator_cmd:
+            return ToolResult(
+                output="manage_service add_target: service_name and validator_cmd required",
+                success=False, duration_ms=_ms(),
+            )
+        _db.add_managed_service_target(user_id, service_name, validator_cmd)
+        return ToolResult(
+            output=f"registered: {service_name} (validator: {validator_cmd})",
+            success=True, duration_ms=_ms(),
+        )
+
+    if action == "remove_target":
+        if not service_name:
+            return ToolResult(
+                output="manage_service remove_target: service_name required",
+                success=False, duration_ms=_ms(),
+            )
+        _db.remove_managed_service_target(user_id, service_name)
+        return ToolResult(output=f"removed: {service_name}", success=True, duration_ms=_ms())
+
+    if action == "status":
+        if not service_name:
+            return ToolResult(
+                output="manage_service status: service_name required",
+                success=False, duration_ms=_ms(),
+            )
+        managed = _db.get_managed_service_target(user_id, service_name)
+        if managed is None:
+            return ToolResult(
+                output=f"not allowlisted: {service_name}",
+                success=True, duration_ms=_ms(),
+            )
+        results = []
+        for op_action in ("restart", "start", "stop"):
+            op_class = f"service_{op_action}"
+            track = _db.get_operator_track_record(user_id, op_class, service_name)
+            results.append(
+                f"  {op_action}: graduated={track.graduated} "
+                f"verified_successes={track.verified_successes} "
+                f"last_outcome={track.last_outcome}"
+            )
+        output = (
+            f"target: {service_name}\n"
+            f"validator_cmd: {managed['validator_cmd']}\n"
+            "graduation:\n" + "\n".join(results)
+        )
+        return ToolResult(output=output, success=True, duration_ms=_ms())
+
+    if action == "action":
+        svc_action: str = params.get("svc_action", "")
+        if not service_name or not svc_action:
+            return ToolResult(
+                output="manage_service action: service_name and svc_action required",
+                success=False, duration_ms=_ms(),
+            )
+        try:
+            outcome = operate_on_service(user_id, service_name, svc_action)
+        except ServiceOperatorRefusalError as exc:
+            return ToolResult(output=f"refused (self-protection): {exc}", success=False, duration_ms=_ms())
+        except OperatorError as exc:
+            return ToolResult(output=f"operator error: {exc}", success=False, duration_ms=_ms())
+
+        if outcome.auto_applied:
+            res = outcome.operation_result
+            assert res is not None
+            status = "auto-applied" if res.verified else "applied-but-validator-failed (restored)"
+            return ToolResult(
+                output=f"{status}: {svc_action} {service_name}\nreason: {outcome.reason}",
+                success=res.verified, duration_ms=_ms(),
+            )
+        return ToolResult(
+            output=(
+                f"proposed (pending owner approval): {svc_action} {service_name}\n"
+                f"reason: {outcome.reason}\n"
+                "Call manage_service(action='approved_apply', ...) after reviewing to apply."
+            ),
+            success=True, duration_ms=_ms(),
+        )
+
+    if action == "approved_apply":
+        svc_action = params.get("svc_action", "")
+        if not service_name or not svc_action:
+            return ToolResult(
+                output="manage_service approved_apply: service_name and svc_action required",
+                success=False, duration_ms=_ms(),
+            )
+        try:
+            res = execute_approved_service_action(user_id, service_name, svc_action)
+        except ServiceOperatorRefusalError as exc:
+            return ToolResult(output=f"refused (self-protection): {exc}", success=False, duration_ms=_ms())
+        except OperatorError as exc:
+            return ToolResult(output=f"operator error: {exc}", success=False, duration_ms=_ms())
+        status = "applied and verified" if res.verified else "applied but validator failed (restored)"
+        return ToolResult(
+            output=f"{status}: {svc_action} {service_name}",
+            success=res.verified, duration_ms=_ms(),
+        )
+
+    return ToolResult(
+        output=(
+            f"manage_service: unknown action {action!r}. "
+            "Valid: add_target, remove_target, status, action, approved_apply"
+        ),
+        success=False, duration_ms=_ms(),
+    )
+
+
 REGISTRY: dict[str, ToolFn] = {
-    "bash":       _bash,
-    "bash_readonly": _bash_readonly,
-    "write_file":  _write_file,
-    "read_file":   _read_file,
-    "list_files":  _list_files,
-    "fetch_url":   _fetch_url,
-    "deploy":      _deploy,
-    "git_branch":  _git_branch,
-    "git_commit":  _git_commit,
-    "manage_file": _manage_file,
+    "bash":           _bash,
+    "bash_readonly":  _bash_readonly,
+    "write_file":     _write_file,
+    "read_file":      _read_file,
+    "list_files":     _list_files,
+    "fetch_url":      _fetch_url,
+    "deploy":         _deploy,
+    "git_branch":     _git_branch,
+    "git_commit":     _git_commit,
+    "manage_file":    _manage_file,
+    "manage_service": _manage_service,
 }
 
 TOOL_DEFINITIONS: list[dict] = [
@@ -971,6 +1105,45 @@ TOOL_DEFINITIONS: list[dict] = [
                     "new_content": {
                         "type": "string",
                         "description": "New UTF-8 file content (required for edit and approved_apply)",
+                    },
+                },
+                "required": ["action"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "manage_service",
+            "description": (
+                "Manage host service lifecycle via the R2 reversible operator path. "
+                "Actions: add_target (register service_name+validator in allowlist), "
+                "remove_target (deregister), status (show allowlist+graduation state per action), "
+                "action (propose or auto-apply restart/start/stop based on graduation), "
+                "approved_apply (execute owner-approved action, always records toward graduation). "
+                "Requires services to be pre-allowlisted with a validator_cmd. "
+                "Never operates on rawos.service or ssh/sshd (self-protection floor)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["add_target", "remove_target", "status", "action", "approved_apply"],
+                        "description": "Operation to perform",
+                    },
+                    "service_name": {
+                        "type": "string",
+                        "description": "systemd service unit name (e.g. caddy.service)",
+                    },
+                    "svc_action": {
+                        "type": "string",
+                        "enum": ["restart", "start", "stop"],
+                        "description": "Service lifecycle action (required for action and approved_apply)",
+                    },
+                    "validator_cmd": {
+                        "type": "string",
+                        "description": "Shell command that exits 0 iff the service is healthy (required for add_target)",
                     },
                 },
                 "required": ["action"],

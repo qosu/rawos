@@ -20,7 +20,7 @@ import time
 
 import rawos.db as db
 from rawos.config import settings
-from rawos.kernel.arch.base import FileOperator, FileSnapshot
+from rawos.kernel.arch.base import FileOperator, FileSnapshot, ServiceManager
 
 log = logging.getLogger("rawos.kernel.operator")
 
@@ -29,6 +29,24 @@ VALIDATOR_TIMEOUT_S = 30
 
 class OperatorError(Exception):
     """Raised when an operator path refuses to run (safety precondition failed)."""
+
+
+class ServiceOperatorRefusalError(Exception):
+    """Raised when ReversibleServiceAction refuses a self-protected service.
+
+    Self-protected services (rawos.service and the SSH daemon — never the
+    being's own process or the owner's access path) can never be
+    started/stopped/restarted through the operator, even if an owner
+    allowlist entry would otherwise permit it. Mirrors
+    arch.base.FileOperatorRefusalError for the service-lifecycle surface.
+    """
+
+
+_SELF_PROTECTED_SERVICES = frozenset({
+    "rawos.service", "rawos",
+    "ssh.service", "ssh",
+    "sshd.service", "sshd",
+})
 
 
 @dataclass(frozen=True)
@@ -155,6 +173,102 @@ class ReversibleFileEdit:
 
 
 @dataclass(frozen=True)
+class ServiceSnapshot:
+    """Captured pre-apply run-state of a service — the reversible state for
+    ReversibleServiceAction. `was_active` is the systemd is-active verdict
+    immediately before apply()."""
+    service_name: str
+    was_active: bool
+
+
+_SERVICE_ACTIONS = ("restart", "start", "stop")
+
+
+class ReversibleServiceAction:
+    """Second ReversibleOperation instance: a machine service lifecycle
+    action (R2) — restart, start, or stop a systemd unit via ServiceManager.
+
+    capture()/restore() snapshot and restore the unit's run-state
+    (active/inactive). apply() drives the requested action. verify() runs
+    `validator_cmd` — the unfakeable health oracle — for restart/start
+    (the service must be active AND pass the validator); for stop, the
+    systemd is-active verdict alone is the oracle (a stopped service cannot
+    pass a health check).
+
+    KNOWN LIMITATION (stated, not hidden): for `restart` on an
+    already-active service, if the restarted process is unhealthy the unit
+    is still is_active=True, so restore() is a no-op — a bare restart's
+    in-flight state cannot be un-restarted. The failed verify still records
+    verified=False (no graduation credit) and surfaces the failure to the
+    owner. `start` and `stop` are true run-state inverses with clean
+    rollback.
+
+    Refuses at construction:
+      - a self-protected service (rawos.service / ssh / sshd, any form) —
+        ServiceOperatorRefusalError (lockout-safety floor, never silent)
+      - an action outside {restart, start, stop} — OperatorError
+      - an empty validator_cmd — OperatorError (propose-only, can't verify)
+    """
+
+    def __init__(
+        self,
+        service_manager: ServiceManager,
+        service_name: str,
+        action: str,
+        validator_cmd: str,
+    ) -> None:
+        if service_name.strip().lower() in _SELF_PROTECTED_SERVICES:
+            raise ServiceOperatorRefusalError(
+                f"refused: {service_name} is self-protected (lockout-safety floor)"
+            )
+        if action not in _SERVICE_ACTIONS:
+            raise OperatorError(
+                f"refusing to construct ReversibleServiceAction for {service_name}: "
+                f"unknown action {action!r} — must be one of {_SERVICE_ACTIONS}"
+            )
+        if not validator_cmd:
+            raise OperatorError(
+                f"refusing to construct ReversibleServiceAction for {service_name}: "
+                "no validator_cmd declared — target is propose-only"
+            )
+        self._manager = service_manager
+        self.service_name = service_name
+        self.action = action
+        self._validator_cmd = validator_cmd
+
+    def capture(self) -> ServiceSnapshot:
+        return ServiceSnapshot(
+            service_name=self.service_name,
+            was_active=self._manager.is_active(self.service_name),
+        )
+
+    def apply(self) -> None:
+        if self.action == "restart":
+            self._manager.restart(self.service_name)
+        elif self.action == "start":
+            self._manager.start(self.service_name)
+        else:  # "stop"
+            self._manager.stop(self.service_name)
+
+    def verify(self) -> bool:
+        if self.action == "stop":
+            return self._manager.is_active(self.service_name) is False
+        return (
+            self._manager.is_active(self.service_name) is True
+            and run_validator(self._validator_cmd).passed
+        )
+
+    def restore(self, snapshot: ServiceSnapshot) -> None:
+        is_active_now = self._manager.is_active(self.service_name)
+        if snapshot.was_active and not is_active_now:
+            self._manager.start(self.service_name)
+        elif not snapshot.was_active and is_active_now:
+            self._manager.stop(self.service_name)
+        # else: already matches the pre-apply state (or a bare restart left
+        # an active service active — the stated restart limitation), no-op.
+
+
+@dataclass(frozen=True)
 class OperateOutcome:
     """Result of operate_on_file: either auto-applied or proposed."""
     auto_applied: bool
@@ -265,5 +379,125 @@ def execute_approved_file_edit(
     result = run_reversible_operation(edit)
     db.update_operator_track_record(
         user_id, operation_class, target_path, verified=result.verified, now=now_,
+    )
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Phase 23a — service operator gate (R2, mirrors the R1 file gate above)
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class ServiceOperateOutcome:
+    """Result of operate_on_service: either auto-applied or proposed."""
+    auto_applied: bool
+    proposed: bool
+    operation_result: "OperationResult | None"
+    proposed_action: "str | None"
+    proposed_validator_cmd: "str | None"
+    reason: str
+
+
+def operate_on_service(
+    user_id: str,
+    service_name: str,
+    action: str,
+    *,
+    service_manager: "ServiceManager | None" = None,
+    now: "int | None" = None,
+) -> ServiceOperateOutcome:
+    """Single entry-point for managed service lifecycle actions (R2).
+
+    Auto-applies iff ALL hold:
+      1. settings.operator_service_enabled is True
+      2. service_name in managed_service_targets allowlist for user_id
+      3. (f"service_{action}", service_name) graduated (GRADUATION_THRESHOLD verified successes)
+
+    On any condition failure: propose-only (no track-record write).
+    ServiceOperatorRefusalError (self-protection) propagates unconditionally.
+    """
+    now_ = now if now is not None else int(time.time())
+    operation_class = f"service_{action}"
+
+    managed = db.get_managed_service_target(user_id, service_name)
+    if managed is None:
+        return ServiceOperateOutcome(
+            auto_applied=False,
+            proposed=True,
+            operation_result=None,
+            proposed_action=action,
+            proposed_validator_cmd=None,
+            reason="target not in managed_service_targets allowlist",
+        )
+
+    validator_cmd: str = managed["validator_cmd"]
+
+    if not settings.operator_service_enabled:
+        return ServiceOperateOutcome(
+            auto_applied=False,
+            proposed=True,
+            operation_result=None,
+            proposed_action=action,
+            proposed_validator_cmd=validator_cmd,
+            reason="operator_service_enabled=False",
+        )
+
+    track = db.get_operator_track_record(user_id, operation_class, service_name)
+    if not track.graduated:
+        return ServiceOperateOutcome(
+            auto_applied=False,
+            proposed=True,
+            operation_result=None,
+            proposed_action=action,
+            proposed_validator_cmd=validator_cmd,
+            reason="operation not yet graduated",
+        )
+
+    from rawos.kernel.arch import get_arch
+    resolved_mgr = service_manager if service_manager is not None else get_arch().service_manager
+    svc_op = ReversibleServiceAction(resolved_mgr, service_name, action, validator_cmd)
+    result = run_reversible_operation(svc_op)  # ServiceOperatorRefusalError propagates
+    db.update_operator_track_record(
+        user_id, operation_class, service_name, verified=result.verified, now=now_,
+    )
+    return ServiceOperateOutcome(
+        auto_applied=True,
+        proposed=False,
+        operation_result=result,
+        proposed_action=None,
+        proposed_validator_cmd=None,
+        reason=result.detail,
+    )
+
+
+def execute_approved_service_action(
+    user_id: str,
+    service_name: str,
+    action: str,
+    *,
+    service_manager: "ServiceManager | None" = None,
+    now: "int | None" = None,
+) -> OperationResult:
+    """Execute an owner-approved service action: run full contract + record toward graduation.
+
+    Does not check operator_service_enabled or graduation — the owner explicitly approved.
+    ServiceOperatorRefusalError (self-protection floor) propagates unconditionally.
+    """
+    now_ = now if now is not None else int(time.time())
+    operation_class = f"service_{action}"
+
+    managed = db.get_managed_service_target(user_id, service_name)
+    if managed is None:
+        raise OperatorError(
+            f"execute_approved_service_action: {service_name!r} not in managed_service_targets allowlist"
+        )
+
+    validator_cmd: str = managed["validator_cmd"]
+    from rawos.kernel.arch import get_arch
+    resolved_mgr = service_manager if service_manager is not None else get_arch().service_manager
+    svc_op = ReversibleServiceAction(resolved_mgr, service_name, action, validator_cmd)
+    result = run_reversible_operation(svc_op)
+    db.update_operator_track_record(
+        user_id, operation_class, service_name, verified=result.verified, now=now_,
     )
     return result

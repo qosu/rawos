@@ -19,6 +19,7 @@ class ResourceProbe(Protocol):
 
 class ServiceManager(Protocol):
     supports_reversible_apply: bool
+    supports_service_ops: bool
 
     def list_failed(self) -> list[str]:
         """Return unit names currently in a FAILED state."""
@@ -30,6 +31,14 @@ class ServiceManager(Protocol):
 
     def restart(self, name: str) -> bool:
         """Restart the named unit. Return True on success, False on failure."""
+        ...
+
+    def start(self, name: str) -> bool:
+        """Start the named unit. Return True on success, False on failure."""
+        ...
+
+    def stop(self, name: str) -> bool:
+        """Stop the named unit. Return True on success, False on failure."""
         ...
 
     def generate_unit(

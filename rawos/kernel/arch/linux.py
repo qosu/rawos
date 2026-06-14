@@ -35,6 +35,7 @@ class LinuxResourceProbe:
 
 class LinuxServiceManager:
     supports_reversible_apply = True
+    supports_service_ops = True
 
     def list_failed(self) -> list[str]:
         try:
@@ -72,6 +73,26 @@ class LinuxServiceManager:
         try:
             r = subprocess.run(
                 ["systemctl", "restart", name],
+                capture_output=True, text=True, timeout=30.0,
+            )
+        except Exception:
+            return False
+        return r.returncode == 0
+
+    def start(self, name: str) -> bool:
+        try:
+            r = subprocess.run(
+                ["systemctl", "start", name],
+                capture_output=True, text=True, timeout=30.0,
+            )
+        except Exception:
+            return False
+        return r.returncode == 0
+
+    def stop(self, name: str) -> bool:
+        try:
+            r = subprocess.run(
+                ["systemctl", "stop", name],
                 capture_output=True, text=True, timeout=30.0,
             )
         except Exception:

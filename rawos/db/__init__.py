@@ -890,3 +890,51 @@ def remove_managed_file_target(user_id: str, target_path: str) -> None:
             "DELETE FROM managed_file_targets WHERE user_id = ? AND target_path = ?",
             (user_id, target_path),
         )
+
+
+def get_managed_service_target(user_id: str, service_name: str) -> dict | None:
+    """Return the allowlist row for (user, service_name), or None if not allowlisted."""
+    with _conn() as conn:
+        row = conn.execute(
+            """SELECT service_name, validator_cmd, created_at
+               FROM managed_service_targets
+               WHERE user_id = ? AND service_name = ?""",
+            (user_id, service_name),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def list_managed_service_targets(user_id: str) -> list[dict]:
+    """Return all allowlisted (service_name, validator_cmd) rows for user_id."""
+    with _conn() as conn:
+        rows = conn.execute(
+            """SELECT service_name, validator_cmd, created_at
+               FROM managed_service_targets
+               WHERE user_id = ?""",
+            (user_id,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def add_managed_service_target(user_id: str, service_name: str, validator_cmd: str) -> None:
+    """Register (service_name, validator_cmd) as an owner-allowlisted target.
+
+    Upserts: re-registering a service updates its validator_cmd.
+    """
+    with _conn() as conn:
+        conn.execute(
+            """INSERT INTO managed_service_targets (user_id, service_name, validator_cmd)
+               VALUES (?, ?, ?)
+               ON CONFLICT(user_id, service_name) DO UPDATE SET
+                   validator_cmd = excluded.validator_cmd""",
+            (user_id, service_name, validator_cmd),
+        )
+
+
+def remove_managed_service_target(user_id: str, service_name: str) -> None:
+    """Remove service_name from the owner allowlist (no-op if not present)."""
+    with _conn() as conn:
+        conn.execute(
+            "DELETE FROM managed_service_targets WHERE user_id = ? AND service_name = ?",
+            (user_id, service_name),
+        )

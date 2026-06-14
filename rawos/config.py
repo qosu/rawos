@@ -97,6 +97,12 @@ class Settings(BaseSettings):
     operator_scan_enabled: bool = False
     operator_scan_interval_s: int = 600
 
+    # Phase 23a ('Supervisor authority') — managed service lifecycle actions (R2)
+    operator_service_enabled: bool = False   # dormant: auto-apply only when ON AND
+    # (service_<action>, target) graduated (>=3 verified successes). Separate from
+    # operator_enabled (R1 file edits) — each surface is enabled/reverted independently.
+    # Propose-only when OFF or ungraduated.
+
     # Phase 20 — system perception
     system_perception_enabled: bool = False
     system_perception_paths: list[str] = ["/root/rawos", "/etc/rawos", "/etc/systemd/system"]

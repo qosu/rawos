@@ -57,6 +57,7 @@ class MacOSResourceProbe:
 
 class MacOSServiceManager:
     supports_reversible_apply = False
+    supports_service_ops = False
 
     def list_failed(self) -> list[str]:
         """Return launchd labels with non-zero exit status and no running PID.
@@ -121,6 +122,14 @@ class MacOSServiceManager:
         except Exception:
             return False
         return r.returncode == 0
+
+    def start(self, name: str) -> bool:
+        """NOTE: supports_service_ops=False — never reached by the operator gate."""
+        return False
+
+    def stop(self, name: str) -> bool:
+        """NOTE: supports_service_ops=False — never reached by the operator gate."""
+        return False
 
 
 class MacOSLogReader:
