@@ -938,3 +938,55 @@ def remove_managed_service_target(user_id: str, service_name: str) -> None:
             "DELETE FROM managed_service_targets WHERE user_id = ? AND service_name = ?",
             (user_id, service_name),
         )
+
+
+# ---------------------------------------------------------------------------
+# Phase 22 — PAM target allowlist (managed_pam_targets)
+# ---------------------------------------------------------------------------
+
+def get_managed_pam_target(user_id: str, pam_file: str) -> dict | None:
+    """Return the allowlist row for (user, pam_file), or None if not allowlisted."""
+    with _conn() as conn:
+        row = conn.execute(
+            """SELECT pam_file, created_at
+               FROM managed_pam_targets
+               WHERE user_id = ? AND pam_file = ?""",
+            (user_id, pam_file),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def list_managed_pam_targets(user_id: str) -> list[dict]:
+    """Return all allowlisted pam_file rows for user_id."""
+    with _conn() as conn:
+        rows = conn.execute(
+            """SELECT pam_file, created_at
+               FROM managed_pam_targets
+               WHERE user_id = ?""",
+            (user_id,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def add_managed_pam_target(user_id: str, pam_file: str) -> None:
+    """Register pam_file as an owner-allowlisted PAM target for user_id.
+
+    Upsert: re-registering is idempotent (updates created_at is not needed —
+    the constraint is existence, not recency).
+    """
+    with _conn() as conn:
+        conn.execute(
+            """INSERT INTO managed_pam_targets (user_id, pam_file)
+               VALUES (?, ?)
+               ON CONFLICT(user_id, pam_file) DO NOTHING""",
+            (user_id, pam_file),
+        )
+
+
+def remove_managed_pam_target(user_id: str, pam_file: str) -> None:
+    """Remove pam_file from the owner allowlist (no-op if not present)."""
+    with _conn() as conn:
+        conn.execute(
+            "DELETE FROM managed_pam_targets WHERE user_id = ? AND pam_file = ?",
+            (user_id, pam_file),
+        )

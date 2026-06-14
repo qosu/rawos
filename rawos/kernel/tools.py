@@ -908,6 +908,132 @@ async def _manage_service(params: dict[str, Any], workdir: str) -> ToolResult:
     )
 
 
+
+async def _manage_pam(params: dict[str, Any], workdir: str) -> ToolResult:
+    """PAM target allowlist + owner-approved PAM write (R3-adjacent, no autonomous path)."""
+    import time as _time
+    from pathlib import Path as _Path
+    import rawos.db as _db
+    from rawos.kernel.billing_context import get_billing_context
+    from rawos.kernel.pam_operator import (
+        PamRefusalError,
+        PamInstallError,
+        commit_pam_edit,
+        execute_approved_pam_edit,
+        _SELF_PROTECTED_PAM_FILES,
+    )
+    from rawos.kernel.operator import OperatorError
+
+    ctx = get_billing_context()
+    if ctx is None:
+        return ToolResult(output="manage_pam: no active agent context", success=False, duration_ms=0)
+    user_id: str = ctx["user_id"]
+
+    action = params.get("action", "")
+    pam_file: str = params.get("pam_file", "")
+    t0 = _time.monotonic()
+
+    def _ms() -> int:
+        return int((_time.monotonic() - t0) * 1000)
+
+    # Injectable test overrides (not in public TOOL_DEFINITIONS schema)
+    _pam_dir = _Path(params["_test_pam_dir"]) if "_test_pam_dir" in params else None
+    _backup_dir = _Path(params["_test_backup_dir"]) if "_test_backup_dir" in params else None
+    _systemd = params.get("_test_systemd")
+    _raw_probe = params.get("_test_probe_fn")
+    _probe_fn = (lambda: bool(_raw_probe)) if _raw_probe is not None else None
+
+    if action == "add_target":
+        if not pam_file:
+            return ToolResult(
+                output="manage_pam add_target: pam_file required",
+                success=False, duration_ms=_ms(),
+            )
+        _db.add_managed_pam_target(user_id, pam_file)
+        protected = pam_file in _SELF_PROTECTED_PAM_FILES
+        warning = " (WARNING: self-protected — approved_apply will refuse)" if protected else ""
+        return ToolResult(
+            output=f"registered: {pam_file}{warning}",
+            success=True, duration_ms=_ms(),
+        )
+
+    if action == "remove_target":
+        if not pam_file:
+            return ToolResult(
+                output="manage_pam remove_target: pam_file required",
+                success=False, duration_ms=_ms(),
+            )
+        _db.remove_managed_pam_target(user_id, pam_file)
+        return ToolResult(output=f"removed: {pam_file}", success=True, duration_ms=_ms())
+
+    if action == "status":
+        if not pam_file:
+            return ToolResult(
+                output="manage_pam status: pam_file required",
+                success=False, duration_ms=_ms(),
+            )
+        if pam_file in _SELF_PROTECTED_PAM_FILES:
+            return ToolResult(
+                output=f"{pam_file}: self-protected (in _SELF_PROTECTED_PAM_FILES — refused at construction)",
+                success=True, duration_ms=_ms(),
+            )
+        managed = _db.get_managed_pam_target(user_id, pam_file)
+        if managed is None:
+            return ToolResult(
+                output=f"not allowlisted: {pam_file}",
+                success=True, duration_ms=_ms(),
+            )
+        return ToolResult(
+            output=f"target: {pam_file}\nstatus: allowlisted (protected=no, oracle=probe-key)",
+            success=True, duration_ms=_ms(),
+        )
+
+    if action == "approved_apply":
+        new_content: str = params.get("new_content", "")
+        if not pam_file or not new_content:
+            return ToolResult(
+                output="manage_pam approved_apply: pam_file and new_content required",
+                success=False, duration_ms=_ms(),
+            )
+        try:
+            snap_id = execute_approved_pam_edit(
+                user_id, pam_file, new_content.encode(),
+                _systemd=_systemd,
+                _probe_fn=_probe_fn,
+                _pam_dir=_pam_dir,
+                _backup_dir=_backup_dir,
+            )
+        except PamRefusalError as exc:
+            return ToolResult(output=f"refused (self-protection floor): {exc}", success=False, duration_ms=_ms())
+        except PamInstallError as exc:
+            return ToolResult(output=f"install failed (probe or apply error): {exc}", success=False, duration_ms=_ms())
+        except OperatorError as exc:
+            return ToolResult(output=f"operator error: {exc}", success=False, duration_ms=_ms())
+        return ToolResult(
+            output=(
+                f"applied and ARMED: {pam_file}\n"
+                f"snapshot_id: {snap_id}\n"
+                "Deadman timer running. Verify auth in a NEW session, then call\n"
+                "manage_pam(action='commit') to disarm — or wait for auto-revert."
+            ),
+            success=True, duration_ms=_ms(),
+        )
+
+    if action == "commit":
+        commit_pam_edit(_systemd=_systemd)
+        return ToolResult(
+            output="rawos-pam-revert deadman disarmed. PAM change committed.",
+            success=True, duration_ms=_ms(),
+        )
+
+    return ToolResult(
+        output=(
+            f"manage_pam: unknown action {action!r}. "
+            "Valid: add_target, remove_target, status, approved_apply, commit"
+        ),
+        success=False, duration_ms=_ms(),
+    )
+
 REGISTRY: dict[str, ToolFn] = {
     "bash":           _bash,
     "bash_readonly":  _bash_readonly,
@@ -920,6 +1046,7 @@ REGISTRY: dict[str, ToolFn] = {
     "git_commit":     _git_commit,
     "manage_file":    _manage_file,
     "manage_service": _manage_service,
+    "manage_pam":     _manage_pam,
 }
 
 TOOL_DEFINITIONS: list[dict] = [
@@ -1150,6 +1277,41 @@ TOOL_DEFINITIONS: list[dict] = [
             },
         },
     },
+            {
+            "type": "function",
+            "function": {
+                "name": "manage_pam",
+                "description": (
+                    "Manage host PAM write authority via the R3-adjacent owner-approved path. "
+                    "Actions: add_target (allowlist a non-root-critical pam.d file), "
+                    "remove_target (deregister), status (show allowlist + protection status), "
+                    "approved_apply (execute owner-approved PAM edit — arms deadman, writes pam.d, "
+                    "runs live-auth probe; returns snapshot_id in ARMED state), "
+                    "commit (disarm deadman after out-of-band verification). "
+                    "Never writes sshd/common-auth/sudo/login or any self-protected file. "
+                    "No autonomous path — approved_apply requires explicit owner call each time."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "action": {
+                            "type": "string",
+                            "enum": ["add_target", "remove_target", "status", "approved_apply", "commit"],
+                            "description": "Operation to perform",
+                        },
+                        "pam_file": {
+                            "type": "string",
+                            "description": "pam.d filename without path prefix (e.g. rawos-guest)",
+                        },
+                        "new_content": {
+                            "type": "string",
+                            "description": "Full new pam.d file content (required for approved_apply)",
+                        },
+                    },
+                    "required": ["action"],
+                },
+            },
+        },
 ]
 
 

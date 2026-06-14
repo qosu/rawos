@@ -103,6 +103,11 @@ class Settings(BaseSettings):
     # operator_enabled (R1 file edits) — each surface is enabled/reverted independently.
     # Propose-only when OFF or ungraduated.
 
+    # Phase 22 (PAM safety-floor) — owner-approved pam.d write authority (R3-adjacent)
+    operator_pam_enabled: bool = False   # dormant: no autonomous path; propose-only always.
+    # PAM is R3-adjacent (single-root machine, deny root = permanent lockout) — no
+    # graduation-based auto-apply exists. Only execute_approved_pam_edit() path (owner-explicit).
+
     # Phase 20 — system perception
     system_perception_enabled: bool = False
     system_perception_paths: list[str] = ["/root/rawos", "/etc/rawos", "/etc/systemd/system"]
