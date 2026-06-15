@@ -309,6 +309,38 @@ class TestArmAndSwap:
         assert exit_fn.calls == []
         assert not (state_dir / "pending.json").exists()
 
+    def test_default_revert_cmd_targets_prod_script(self, tmp_path: Path) -> None:
+        sd = FakeSelfReloadDeadman()
+        runner = _runner()
+        exit_fn = FakeExit()
+        snap = _snapshot()
+
+        arm_and_swap(
+            snap, _systemd=sd, _exit=exit_fn,
+            _source_root="/fake/repo", _runner=runner, _state_dir=str(tmp_path / "state"),
+        )
+
+        assert sd.armed[0][2] == f"/usr/local/bin/rawos-selfreload-revert {snap.old_sha} {snap.state_id}"
+
+    def test_injected_revert_cmd_overrides_default(self, tmp_path: Path) -> None:
+        """A twin-prove harness must be able to point the deadman at a
+        sandboxed revert script instead of the prod
+        /usr/local/bin/rawos-selfreload-revert (which hardcodes /root/rawos
+        and `systemctl restart rawos`)."""
+        sd = FakeSelfReloadDeadman()
+        runner = _runner()
+        exit_fn = FakeExit()
+        snap = _snapshot()
+        custom = f"/usr/local/bin/rawos-selfprobe-revert {snap.old_sha} {snap.state_id}"
+
+        arm_and_swap(
+            snap, _systemd=sd, _exit=exit_fn,
+            _source_root="/fake/repo", _runner=runner, _state_dir=str(tmp_path / "state"),
+            _revert_cmd=custom,
+        )
+
+        assert sd.armed[0][2] == custom
+
     def test_single_flight_refuses_second(self, tmp_path: Path) -> None:
         state_dir = tmp_path / "state"
         sd = FakeSelfReloadDeadman()

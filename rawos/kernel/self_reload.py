@@ -329,6 +329,7 @@ def arm_and_swap(
     _runner: object | None = None,
     _state_dir: str | None = None,
     _now: Callable[[], float] = time.time,
+    _revert_cmd: str | None = None,
 ) -> NoReturn:
     """Arm the deadman, swap source to new_sha, then kill this process.
 
@@ -370,7 +371,7 @@ def arm_and_swap(
     }
     state_path.write_text(json.dumps(record))
 
-    revert_cmd = f"/usr/local/bin/rawos-selfreload-revert {snap.old_sha} {snap.state_id}"
+    revert_cmd = _revert_cmd or f"/usr/local/bin/rawos-selfreload-revert {snap.old_sha} {snap.state_id}"
     try:
         sd.arm(snap.deadman_unit, SELF_RELOAD_DEADMAN_DELAY_S, revert_cmd)
     except Exception:
