@@ -214,3 +214,69 @@ def test_self_probe_tool_set_includes_write_and_commit():
     names = {t["function"]["name"] for t in _p._get_tools_for_self_probe()}
     assert "write_file" in names
     assert "git_commit" in names
+
+
+# ---------------------------------------------------------------------------
+# _maybe_autonomous_self_reload() — Stage 2 loop wiring (I-SR10)
+# ---------------------------------------------------------------------------
+
+class TestMaybeAutonomousSelfReload:
+    """_maybe_autonomous_self_reload() must be dormant unless both gates are open."""
+
+    def test_returns_immediately_when_flag_false(self, monkeypatch) -> None:
+        """I-SR10: self_reload_autonomous_enabled=False → operate_on_self_reload never called."""
+        import rawos.kernel.self_reload as sr_mod
+        monkeypatch.setattr(settings, "self_reload_autonomous_enabled", False)
+
+        called: list = []
+        monkeypatch.setattr(sr_mod, "operate_on_self_reload", lambda *a, **kw: called.append(a))
+
+        asyncio.run(_proactive_mod._maybe_autonomous_self_reload())
+        assert called == []
+
+    def test_calls_operate_when_flag_true(self, monkeypatch) -> None:
+        """When enabled, operate_on_self_reload is called with RAWOS_ENTITY_USER_ID."""
+        import rawos.kernel.self_reload as sr_mod
+        from rawos.kernel.self_reload import SelfReloadOperateOutcome
+        monkeypatch.setattr(settings, "self_reload_autonomous_enabled", True)
+
+        called_with: list = []
+
+        def _fake_operate(user_id):
+            called_with.append(user_id)
+            return SelfReloadOperateOutcome(
+                auto_applied=False, proposed=True,
+                new_sha="NEWSHA", reason="not graduated",
+            )
+
+        monkeypatch.setattr(sr_mod, "operate_on_self_reload", _fake_operate)
+
+        asyncio.run(_proactive_mod._maybe_autonomous_self_reload())
+        assert len(called_with) == 1
+        assert called_with[0] == _proactive_mod.RAWOS_ENTITY_USER_ID
+
+    def test_handles_refusal_error_without_propagating(self, monkeypatch) -> None:
+        """SelfReloadRefusalError must be caught — must not abort the probe loop."""
+        import rawos.kernel.self_reload as sr_mod
+        from rawos.kernel.self_reload import SelfReloadRefusalError
+        monkeypatch.setattr(settings, "self_reload_autonomous_enabled", True)
+
+        def _raise(_user_id):
+            raise SelfReloadRefusalError("refused in test")
+
+        monkeypatch.setattr(sr_mod, "operate_on_self_reload", _raise)
+
+        asyncio.run(_proactive_mod._maybe_autonomous_self_reload())  # must not raise
+
+    def test_handles_preflight_error_without_propagating(self, monkeypatch) -> None:
+        """SelfReloadPreflightError must be caught — must not abort the probe loop."""
+        import rawos.kernel.self_reload as sr_mod
+        from rawos.kernel.self_reload import SelfReloadPreflightError
+        monkeypatch.setattr(settings, "self_reload_autonomous_enabled", True)
+
+        def _raise(_user_id):
+            raise SelfReloadPreflightError("preflight fail in test")
+
+        monkeypatch.setattr(sr_mod, "operate_on_self_reload", _raise)
+
+        asyncio.run(_proactive_mod._maybe_autonomous_self_reload())  # must not raise

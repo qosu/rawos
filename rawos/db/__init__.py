@@ -996,18 +996,25 @@ def remove_managed_pam_target(user_id: str, pam_file: str) -> None:
 # Phase 25 Stage 1 — self-reload outcome ledger (managed_self_reload)
 # ---------------------------------------------------------------------------
 
-def record_self_reload_outcome(old_sha: str, new_sha: str, outcome: str) -> None:
+def record_self_reload_outcome(
+    old_sha: str,
+    new_sha: str,
+    outcome: str,
+    *,
+    autonomous: bool = False,
+) -> None:
     """Append one row to the self-reload history ledger.
 
     outcome must be one of 'committed' | 'resurrected' | 'liveness_failed'
     (enforced by the migration 026 CHECK constraint — invalid values raise
     sqlite3.IntegrityError).
+    autonomous=True when triggered by operate_on_self_reload() (Stage 2, I-SR11).
     """
     with _conn() as conn:
         conn.execute(
-            """INSERT INTO managed_self_reload (old_sha, new_sha, outcome)
-               VALUES (?, ?, ?)""",
-            (old_sha, new_sha, outcome),
+            """INSERT INTO managed_self_reload (old_sha, new_sha, outcome, autonomous)
+               VALUES (?, ?, ?, ?)""",
+            (old_sha, new_sha, outcome, 1 if autonomous else 0),
         )
 
 
@@ -1015,7 +1022,7 @@ def list_self_reload_history(limit: int = 20) -> list[dict]:
     """Return the most recent self-reload outcomes, newest first."""
     with _conn() as conn:
         rows = conn.execute(
-            """SELECT old_sha, new_sha, outcome, created_at
+            """SELECT old_sha, new_sha, outcome, autonomous, created_at
                FROM managed_self_reload
                ORDER BY created_at DESC, id DESC
                LIMIT ?""",

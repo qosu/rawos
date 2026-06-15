@@ -108,11 +108,12 @@ class Settings(BaseSettings):
     # PAM is R3-adjacent (single-root machine, deny root = permanent lockout) — no
     # graduation-based auto-apply exists. Only execute_approved_pam_edit() path (owner-explicit).
 
-    # Phase 25 Stage 1 ('The Ouroboros') — safe self-reload (R-self)
-    self_reload_enabled: bool = False   # dormant: no autonomous path exists in Stage 1
-    # (kernel/self_reload.py exposes no operate_on_self_reload symbol). Owner-triggered
-    # only, via `rawos selfreload arm-and-go <sha>`. Stage 2 would gate an autonomous
-    # trigger behind a separate self_reload_autonomous_enabled flag (not added here).
+    # Phase 25 Stage 1+2 ('The Ouroboros') — safe self-reload (R-self)
+    self_reload_enabled: bool = False   # dormant: owner-triggered path only.
+    # Owner: `rawos selfreload arm-and-go <sha>`. Stage 2 autonomous path (I-SR10)
+    # is a SEPARATE gate — operate_on_self_reload() checks self_reload_enabled AND
+    # self_reload_autonomous_enabled AND graduation; both must be True to auto-apply.
+    self_reload_autonomous_enabled: bool = False  # I-SR10: dormant until graduation proven
 
     # Phase 20 — system perception
     system_perception_enabled: bool = False

@@ -156,9 +156,13 @@ async def _self_reload_boot_commit_task() -> None:
 
     import httpx
 
+    import time as _time
+
+    from rawos.kernel.entity import RAWOS_ENTITY_USER_ID
     from rawos.kernel.self_reload import (
         SELF_RELOAD_STATE_DIR,
         SELF_RELOAD_STATE_FILENAME,
+        SOURCE_ROOT,
         boot_liveness_commit,
     )
 
@@ -169,6 +173,7 @@ async def _self_reload_boot_commit_task() -> None:
     try:
         pending = _json.loads(state_path.read_text())
         old_sha, new_sha = pending["old_sha"], pending["new_sha"]
+        autonomous = bool(pending.get("autonomous", False))
     except Exception:
         _log.exception("self-reload: pending.json unreadable — leaving deadman armed")
         return
@@ -190,11 +195,23 @@ async def _self_reload_boot_commit_task() -> None:
     if outcome == "no_pending":
         return
 
-    _log.info("self-reload: boot_liveness_commit -> %s (old=%s new=%s)", outcome, old_sha, new_sha)
+    _log.info("self-reload: boot_liveness_commit -> %s (old=%s new=%s autonomous=%s)", outcome, old_sha, new_sha, autonomous)
     try:
-        db.record_self_reload_outcome(old_sha, new_sha, outcome)
+        db.record_self_reload_outcome(old_sha, new_sha, outcome, autonomous=autonomous)
     except Exception:
         _log.exception("self-reload: failed to record outcome %s in ledger", outcome)
+
+    # I-SR11: update graduation ledger so operate_on_self_reload() can check readiness.
+    try:
+        db.update_operator_track_record(
+            RAWOS_ENTITY_USER_ID,
+            "self_reload",
+            SOURCE_ROOT,
+            verified=(outcome == "committed"),
+            now=int(_time.time()),
+        )
+    except Exception:
+        _log.exception("self-reload: failed to update track record for outcome %s", outcome)
 
 
 async def _start_autonomous_scan() -> None:

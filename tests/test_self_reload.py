@@ -14,15 +14,21 @@ new_sha is always "NEWSHA" unless a test says otherwise.
 """
 from __future__ import annotations
 
+import hashlib
 import json
+import os
+import tempfile
+import time
 import uuid
 from pathlib import Path
 
 import pytest
 
+import rawos.db as db
 from rawos.kernel.self_reload import (
     SELF_RELOAD_DEADMAN_DELAY_S,
     SELF_RELOAD_DEADMAN_UNIT,
+    SelfReloadOperateOutcome,
     SelfReloadPreflightError,
     SelfReloadRefusalError,
     SelfReloadSnapshot,
@@ -30,8 +36,11 @@ from rawos.kernel.self_reload import (
     arm_and_swap,
     boot_liveness_commit,
     execute_owner_self_reload,
+    operate_on_self_reload,
     preflight_stage,
 )
+from rawos.kernel.track_record import GRADUATION_THRESHOLD
+from rawos.models import User
 
 
 # ---------------------------------------------------------------------------
@@ -421,13 +430,119 @@ class TestOwnerAndDormancy:
         record = json.loads((state_dir / "pending.json").read_text())
         assert record["new_sha"] == "NEWSHA"
 
-    def test_no_autonomous_entrypoint_exists(self) -> None:
+    def test_autonomous_entrypoint_exists_but_inert_by_default(self) -> None:
+        """I-SR6 superseded (Stage 2): operate_on_self_reload now exists, but
+        is inert until self_reload_enabled=True AND the operation class is
+        graduated (I-SR9) — neither is true on a fresh install."""
         import rawos.kernel.self_reload as self_reload_module
-        assert not hasattr(self_reload_module, "operate_on_self_reload")
+        from rawos.config import settings
+        assert hasattr(self_reload_module, "operate_on_self_reload")
+        assert settings.self_reload_enabled is False
 
     def test_flag_defaults_false(self) -> None:
         from rawos.config import settings
         assert settings.self_reload_enabled is False
+
+    def test_autonomous_loop_flag_defaults_false(self) -> None:
+        from rawos.config import settings
+        assert settings.self_reload_autonomous_enabled is False
+
+
+# ---------------------------------------------------------------------------
+# operate_on_self_reload() — Stage 2 autonomous gate (I-SR9)
+# ---------------------------------------------------------------------------
+
+class TestOperateOnSelfReload:
+    def setup_method(self) -> None:
+        self.tmp = tempfile.mkdtemp()
+        db.init(os.path.join(self.tmp, "test.db"))
+        self.user = db.create_user(User(
+            email=f"self-reload-gate-{id(self)}-{os.getpid()}@test.com",
+            password_hash=hashlib.sha256(b"pass").hexdigest(),
+        ))
+
+    def _graduate(self, target: str) -> None:
+        now = int(time.time())
+        for i in range(GRADUATION_THRESHOLD * 2):
+            db.update_operator_track_record(
+                self.user.id, "self_reload", target, verified=True, now=now + i,
+            )
+
+    def _runner_with_master(self, master_sha: str, head_sha: str = "OLDSHA") -> FakeRunner:
+        return _runner({
+            ("git", "rev-parse", "HEAD"): FakeResult(stdout=f"{head_sha}\n"),
+            ("git", "rev-parse", "master"): FakeResult(stdout=f"{master_sha}\n"),
+        })
+
+    def test_noop_when_master_equals_head(self) -> None:
+        runner = self._runner_with_master("OLDSHA", head_sha="OLDSHA")
+        outcome = operate_on_self_reload(
+            self.user.id, _source_root="/fake/repo", _runner=runner,
+        )
+        assert outcome == SelfReloadOperateOutcome(
+            auto_applied=False, proposed=False, new_sha=None,
+            reason="master HEAD == current HEAD; nothing to reload",
+        )
+
+    def test_propose_only_when_self_reload_disabled(self, monkeypatch) -> None:
+        import rawos.kernel.self_reload as self_reload_module
+        monkeypatch.setattr(self_reload_module.settings, "self_reload_enabled", False)
+        runner = self._runner_with_master("NEWSHA")
+
+        outcome = operate_on_self_reload(
+            self.user.id, _source_root="/fake/repo", _runner=runner,
+        )
+        assert outcome.auto_applied is False
+        assert outcome.proposed is True
+        assert outcome.new_sha == "NEWSHA"
+        assert "self_reload_enabled=False" in outcome.reason
+
+    def test_propose_only_when_ungraduated(self, monkeypatch) -> None:
+        import rawos.kernel.self_reload as self_reload_module
+        monkeypatch.setattr(self_reload_module.settings, "self_reload_enabled", True)
+        runner = self._runner_with_master("NEWSHA")
+
+        outcome = operate_on_self_reload(
+            self.user.id, _source_root="/fake/repo", _runner=runner,
+        )
+        assert outcome.auto_applied is False
+        assert outcome.proposed is True
+        assert "graduated" in outcome.reason
+
+    def test_auto_applies_when_enabled_and_graduated(self, tmp_path, monkeypatch) -> None:
+        import rawos.kernel.self_reload as self_reload_module
+        monkeypatch.setattr(self_reload_module.settings, "self_reload_enabled", True)
+        self._graduate("/fake/repo")
+        runner = self._runner_with_master("NEWSHA")
+        worktree = FakeWorktree()
+        sd = FakeSelfReloadDeadman()
+        exit_fn = FakeExit()
+        state_dir = tmp_path / "state"
+
+        outcome = operate_on_self_reload(
+            self.user.id,
+            _source_root="/fake/repo", _runner=runner, _worktree=worktree,
+            _systemd=sd, _exit=exit_fn, _state_dir=str(state_dir),
+        )
+
+        assert outcome.auto_applied is True
+        assert outcome.proposed is False
+        assert outcome.new_sha == "NEWSHA"
+        assert exit_fn.calls == [0]
+        record = json.loads((state_dir / "pending.json").read_text())
+        assert record["new_sha"] == "NEWSHA"
+        assert record["autonomous"] is True
+
+    def test_propose_only_does_not_write_track_record(self, monkeypatch) -> None:
+        import rawos.kernel.self_reload as self_reload_module
+        monkeypatch.setattr(self_reload_module.settings, "self_reload_enabled", True)
+        runner = self._runner_with_master("NEWSHA")
+
+        operate_on_self_reload(self.user.id, _source_root="/fake/repo", _runner=runner)
+
+        track = db.get_operator_track_record(self.user.id, "self_reload", "/fake/repo")
+        assert track.verified_successes == 0
+        assert track.graduated is False
 
 
 # ---------------------------------------------------------------------------

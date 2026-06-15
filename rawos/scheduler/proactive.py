@@ -1848,6 +1848,43 @@ async def _scan_once(semaphore: asyncio.Semaphore) -> None:
         await asyncio.gather(*tasks, return_exceptions=True)
 
 
+async def _maybe_autonomous_self_reload() -> None:
+    """Phase 25 Stage 2 (I-SR10): attempt autonomous self-reload if enabled and graduated.
+
+    Dormant by default — settings.self_reload_autonomous_enabled=False. Even
+    when enabled, operate_on_self_reload() gates on self_reload_enabled AND
+    graduation (I-SR9); a non-graduated or disabled state returns proposed=True,
+    never auto-applies. Called once per self-probe cycle BEFORE _run_self_probe_cycle
+    so that a real auto-apply (os._exit(0)) kills the process before the probe cycle
+    begins — no partial state.
+    """
+    if not settings.self_reload_autonomous_enabled:
+        return
+    from rawos.kernel.self_reload import (
+        SelfReloadPreflightError,
+        SelfReloadRefusalError,
+        SelfReloadStateError,
+        operate_on_self_reload,
+    )
+
+    _loop = asyncio.get_event_loop()
+    try:
+        outcome = await _loop.run_in_executor(
+            None, operate_on_self_reload, RAWOS_ENTITY_USER_ID
+        )
+    except (SelfReloadRefusalError, SelfReloadPreflightError, SelfReloadStateError):
+        log.exception("autonomous self-reload refused/failed")
+        return
+    except Exception:
+        log.exception("autonomous self-reload unexpected error")
+        return
+
+    if outcome.auto_applied:
+        log.info("autonomous self-reload armed: new_sha=%s", outcome.new_sha)
+    elif outcome.proposed:
+        log.debug("autonomous self-reload proposed (not applied): %s", outcome.reason)
+
+
 async def rawos_self_probe_loop() -> None:
     """
     Phase 16 self-modification entry point.
@@ -1872,6 +1909,7 @@ async def rawos_self_probe_loop() -> None:
     log.info("rawos self-probe loop started (interval=%ds)", SELF_PROBE_INTERVAL_S)
     while True:
         try:
+            await _maybe_autonomous_self_reload()
             await _run_self_probe_cycle()
         except asyncio.CancelledError:
             log.info("rawos self-probe loop cancelled")

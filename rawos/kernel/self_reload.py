@@ -38,6 +38,31 @@ Safety invariants (Stage 1):
   I-SR8  Single-flight: a pending state file refuses a second concurrent
          arm_and_swap (resolve the first one via boot_liveness_commit before
          starting another).
+
+Stage 2 ("M6-for-self", autonomous self-sovereignty) adds the following.
+I-SR6 is superseded (this module now exposes `operate_on_self_reload`), but
+the entrypoint is inert until BOTH new gates open:
+  I-SR9  operate_on_self_reload(user_id) auto-applies (autonomous=True) iff
+         settings.self_reload_enabled is True AND the operator_track_record
+         class "self_reload" for target=SOURCE_ROOT is graduated
+         (GRADUATION_THRESHOLD verified successes — earned-reversible-autonomy,
+         same ladder as operate_on_service). Otherwise propose-only, no
+         side effects, no track-record write. If master HEAD == current HEAD
+         (nothing to become), it is a true no-op (neither auto-applied nor
+         proposed). Preflight refusals (I-SR1/I-SR4/I-SR5) and single-flight
+         (I-SR8) propagate unconditionally — autonomy needs no new safety
+         machinery.
+  I-SR10 settings.self_reload_autonomous_enabled (default False) is the
+         second, independent gate the proactive loop checks before even
+         calling operate_on_self_reload — belt-and-suspenders: flipping
+         self_reload_enabled alone (e.g. for a one-off owner-triggered
+         arm-and-go) does not also enable the autonomous loop path.
+  I-SR11 Every boot_liveness_commit() resolution ("committed" / "resurrected"
+         / "liveness_failed") is recorded both in the managed_self_reload
+         ledger (with the `autonomous` flag carried in pending.json from
+         arm time) AND as one operator_track_record update for class
+         "self_reload" target=SOURCE_ROOT (verified=True only on
+         "committed") — this is the graduation signal I-SR9 reads.
 """
 from __future__ import annotations
 
@@ -177,9 +202,13 @@ class _SelfReloadDeadmanSystemd:
 # ---------------------------------------------------------------------------
 
 def _git_head(runner, cwd: str) -> str:
-    result = runner.run(["git", "rev-parse", "HEAD"], cwd=cwd)
+    return _git_rev_parse(runner, cwd, "HEAD")
+
+
+def _git_rev_parse(runner, cwd: str, ref: str) -> str:
+    result = runner.run(["git", "rev-parse", ref], cwd=cwd)
     if result.returncode != 0:
-        raise SelfReloadStateError(f"git rev-parse HEAD failed: {result.stderr.strip()}")
+        raise SelfReloadStateError(f"git rev-parse {ref} failed: {result.stderr.strip()}")
     return result.stdout.strip()
 
 
@@ -293,6 +322,7 @@ def preflight_stage(
 def arm_and_swap(
     snap: SelfReloadSnapshot,
     *,
+    autonomous: bool = False,
     _systemd: object | None = None,
     _exit: Callable[[int], None] = os._exit,
     _source_root: str | None = None,
@@ -336,6 +366,7 @@ def arm_and_swap(
         "state_id": snap.state_id,
         "armed_at": armed_at,
         "deadman_unit": snap.deadman_unit,
+        "autonomous": autonomous,
     }
     state_path.write_text(json.dumps(record))
 
@@ -439,6 +470,7 @@ def boot_liveness_commit(
 def execute_owner_self_reload(
     new_sha: str,
     *,
+    autonomous: bool = False,
     _source_root: str | None = None,
     _runner: object | None = None,
     _worktree: object | None = None,
@@ -449,14 +481,95 @@ def execute_owner_self_reload(
 ) -> NoReturn:
     """preflight_stage(new_sha) -> arm_and_swap(snapshot). The single funnel.
 
-    Stage 2 (autonomous self-reload, not implemented here) will call this
-    same funnel unchanged after a self-improve branch merges to master — no
-    second arm/swap path is introduced. There is deliberately no
-    `operate_on_self_reload` autonomous gate in this module (I-SR6).
+    Stage 2's operate_on_self_reload() calls this same funnel unchanged
+    (autonomous=True) after a self-improve branch merges to master — no
+    second arm/swap path. `autonomous` is carried into pending.json so the
+    boot-commit task can record it on the managed_self_reload ledger row
+    (I-SR11).
     """
     snap = preflight_stage(new_sha, _source_root=_source_root, _runner=_runner, _worktree=_worktree)
     arm_and_swap(
-        snap,
+        snap, autonomous=autonomous,
         _systemd=_systemd, _exit=_exit,
         _source_root=_source_root, _runner=_runner, _state_dir=_state_dir, _now=_now,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Stage 2 — autonomous gate (I-SR9, I-SR10)
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class SelfReloadOperateOutcome:
+    """Result of operate_on_self_reload: auto-applied, proposed, or no-op."""
+    auto_applied: bool
+    proposed: bool
+    new_sha: str | None
+    reason: str
+
+
+def operate_on_self_reload(
+    user_id: str,
+    *,
+    _source_root: str | None = None,
+    _runner: object | None = None,
+    _worktree: object | None = None,
+    _systemd: object | None = None,
+    _exit: Callable[[int], None] = os._exit,
+    _state_dir: str | None = None,
+    _now: Callable[[], float] = time.time,
+) -> SelfReloadOperateOutcome:
+    """Stage 2 autonomous gate (mirrors operator.operate_on_service).
+
+    Auto-applies (execute_owner_self_reload(new_sha, autonomous=True)) iff
+    ALL hold:
+      1. master HEAD != current HEAD (there is something new to become —
+         otherwise this is a true no-op, neither applied nor proposed)
+      2. settings.self_reload_enabled is True
+      3. operator_track_record class "self_reload", target=SOURCE_ROOT is
+         graduated (GRADUATION_THRESHOLD verified successes, written by the
+         boot-commit task per I-SR11)
+
+    On any condition 2/3 failure: propose-only (no track-record write, no
+    side effects). SelfReloadRefusalError / SelfReloadPreflightError /
+    SelfReloadStateError (preflight refusals, single-flight) propagate
+    unconditionally — autonomy needs no new safety machinery (I-SR1/I-SR4/
+    I-SR5/I-SR8 apply identically).
+    """
+    import rawos.db as db
+
+    source_root = _source_root or SOURCE_ROOT
+    runner = _runner or _GitRunner()
+
+    old_sha = _git_head(runner, source_root)
+    new_sha = _git_rev_parse(runner, source_root, "master")
+
+    if new_sha == old_sha:
+        return SelfReloadOperateOutcome(
+            auto_applied=False, proposed=False, new_sha=None,
+            reason="master HEAD == current HEAD; nothing to reload",
+        )
+
+    if not settings.self_reload_enabled:
+        return SelfReloadOperateOutcome(
+            auto_applied=False, proposed=True, new_sha=new_sha,
+            reason="self_reload_enabled=False",
+        )
+
+    track = db.get_operator_track_record(user_id, "self_reload", source_root)
+    if not track.graduated:
+        return SelfReloadOperateOutcome(
+            auto_applied=False, proposed=True, new_sha=new_sha,
+            reason="self_reload operation class not yet graduated",
+        )
+
+    execute_owner_self_reload(
+        new_sha,
+        autonomous=True,
+        _source_root=_source_root, _runner=_runner, _worktree=_worktree,
+        _systemd=_systemd, _exit=_exit, _state_dir=_state_dir, _now=_now,
+    )
+    return SelfReloadOperateOutcome(
+        auto_applied=True, proposed=False, new_sha=new_sha,
+        reason="armed and swapped to master HEAD (autonomous)",
     )
