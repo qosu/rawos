@@ -391,3 +391,5 @@ unchanged: `self_reload_enabled=False`, `self_reload_autonomous_enabled=False`,
 `/usr/local/bin/rawos-selfprobe-revert`) removed after verification.
 
 _Step 4 marker: trivial no-op commit — `new_sha` for the first real self-reload of `rawos.service` (Phase 25 Ouroboros, Verification Step 4)._
+
+_Step 4 marker v2: trivial no-op commit — actual `new_sha` for the first real self-reload of `rawos.service` (Phase 25 Ouroboros, Verification Step 4, attempt 2 — d87f4809 is the currently-loaded HEAD and cannot be reused as a target)._
