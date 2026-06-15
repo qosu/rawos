@@ -428,3 +428,10 @@ Dormancy unchanged and reconfirmed: `self_reload_enabled=False`,
 untouched.
 
 Phase 25 Stage 1 verification steps 1-8 + this real Step 4: **all complete.**
+
+_Step 4b marker: trivial no-op commit created via `git commit-tree` (NOT checked out as
+HEAD) — distinct `new_sha` for the second real self-reload of `rawos.service`
+(Phase 25 Stage 1 Step 4, attempt 2). Goal: `old_sha != new_sha` so
+`boot_liveness_commit` takes the `committed` branch (not `resurrected`), advancing
+`operator_track_record(self_reload, /root/rawos).verified_successes` toward the
+Stage 2 graduation threshold of 3._
