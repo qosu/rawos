@@ -174,7 +174,7 @@ class Settings(BaseSettings):
     # kernel auto-detach → enforce gone without reboot (I-LSM2). Floor
     # (sshd/systemd/holder/rawos/git) compiled into immutable engine bytecode,
     # checked BEFORE policy maps — policy-map writes CANNOT deny floor (I-LSM5).
-    bpf_lsm_enabled: bool = True           # 24B.2 ACTIVATED 2026-06-15 (audit soak)
+    bpf_lsm_enabled: bool = True           # 24B.2 ACTIVATED + 24B.4 GRADUATED 2026-06-15 (lsm= in GRUB_CMDLINE_LINUX, holder auto-start)
     bpf_lsm_mode: str = "audit"              # audit (log-only) or enforce
     bpf_lsm_object_path: str = "/opt/rawos-bpf/engine.bpf.o"            # path to prebuilt CO-RE .o (empty = dormant)
     bpf_lsm_object_sha256: str = "08f2e291122677177ebabb2653831e0b4a450979ae37ae9b35ae054358273c52"          # sha256 of .o; mismatch → fail-closed (I-LSM11)
