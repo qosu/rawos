@@ -393,3 +393,38 @@ unchanged: `self_reload_enabled=False`, `self_reload_autonomous_enabled=False`,
 _Step 4 marker: trivial no-op commit — `new_sha` for the first real self-reload of `rawos.service` (Phase 25 Ouroboros, Verification Step 4)._
 
 _Step 4 marker v2: trivial no-op commit — actual `new_sha` for the first real self-reload of `rawos.service` (Phase 25 Ouroboros, Verification Step 4, attempt 2 — d87f4809 is the currently-loaded HEAD and cannot be reused as a target)._
+
+## 2026-06-15 — Phase 25 Stage 1 Step 4: FIRST REAL SELF-RELOAD OF rawos.service (production)
+
+Fired `POST /internal/self-reload/arm-and-go {"new_sha":"88e3f7f0"}` against the live
+`rawos.service` (PID 151319, in-memory code at HEAD `d87f4809`). Result:
+
+- `curl` exit 52 (empty reply) — `arm_and_swap` wrote `pending.json`, armed
+  `rawos-selfreload-revert` (180s deadman), `git reset --hard 88e3f7f0`, `os._exit(0)`.
+- systemd respawned `rawos.service` ~5s later as PID 151865.
+- `Application startup complete` ~9s after that; `boot_liveness_commit()` ran its
+  `/health` probe loop, passed, disarmed the deadman, cleared `pending.json`.
+- Post-fire state: `git rev-parse HEAD` == `88e3f7f0` (clean), `/health` == 200, 0
+  armed timers, single new PID. The in-memory process now matches the on-disk source —
+  **the ouroboros joint is closed for the first time in prod.**
+
+**Known limitation, stated not hidden:** `boot_liveness_commit` logged outcome
+`resurrected` (old=new=`88e3f7f0`), not `committed`. Cause: the no-op commit was made
+*before* arming, so `preflight_stage`'s `old_sha` (= HEAD at arm time) already equalled
+`new_sha`. `boot_liveness_commit` checks `current_head == old_sha` first, which is
+trivially true here, so it takes the "resurrected" branch (disarm + clear — same
+cleanup as "committed", just a different label). Effect: `operator_track_record`
+(`self_reload`/`/root/rawos`) got `last_outcome=merged_regressed`,
+`verified_successes=0` — this run does **not** count toward Stage 2's 3-verified-reload
+graduation threshold. The *mechanism* (die → respawn → load new source → prove
+liveness → disarm) is fully proven in prod regardless; a future run that arms
+**before** committing the no-op (so `old_sha != new_sha`) would record `committed` and
+contribute to graduation.
+
+Dormancy unchanged and reconfirmed: `self_reload_enabled=False`,
+`self_reload_autonomous_enabled=False`, `self_reload_debug_endpoint_enabled=False`, no
+`.env` overrides. Only the owner-triggered funnel (`execute_owner_self_reload` via
+`/internal/self-reload/arm-and-go`) was exercised — Stage 2 autonomous path remains
+untouched.
+
+Phase 25 Stage 1 verification steps 1-8 + this real Step 4: **all complete.**
