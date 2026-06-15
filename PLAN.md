@@ -345,3 +345,47 @@ os._exit(0) → systemd respawn → boot_liveness_commit verifies /health, front
 schema → disarm deadman, record verified=True in operator_track_record class
 'self_reload'. This is the joint Phase 25 closes: the being becoming a self-authored
 version of itself, live, with full reversibility if liveness fails.
+
+## 2026-06-15 — Phase 25 Stage 1 twin-prove: self-reload mechanism battle-tested (steps 6-8)
+
+Before any further real self-reload of `rawos.service` is attempted (Verification Step 4
+was proven once already, above), Stage 1's mechanism (`preflight_stage` -> `arm_and_swap`
+-> systemd respawn -> `boot_liveness_commit` -> commit/resurrect/liveness_failed -> deadman
+revert) was independently battle-tested end-to-end on a throwaway twin
+(`rawos-selfprobe.service`, port 8009, `/root/rawos-selfprobe-tree`, now removed).
+
+Findings discovered and fixed during twin-prove (Pass 1 read-only recon, each TDD'd or
+twin-scoped):
+- **C** `bf9cc46a` — prod bug: preflight's worktree subprocess calls used bare `"python3"`,
+  which resolves to system python (no rawos deps) under real systemd PATH -> the import
+  check would ALWAYS fail, refusing every self-reload. Fixed to `sys.executable`.
+  RED->GREEN, full suite 1125/1125.
+- **D** twin-isolation gap (twin `.env` only, no prod change): `chroma_path`/`workspaces_root`
+  defaulted to `/root/rawos/...`, causing the twin to read/write prod's ChromaDB and watch
+  prod's workspaces. Fixed via twin `.env` overrides.
+- **E** twin venv gap (twin venv only, no prod/code change): twin venv was missing
+  `pytest`/`pytest-asyncio`/`pytest-cov`/`coverage`, so preflight's `self_reload_smoke`
+  subset always failed with empty stdout. Installed matching versions from prod's
+  `pyproject.toml`.
+- **G** twin DB seeding (twin DB only, no prod/code change): `update_operator_track_record`
+  raised `FOREIGN KEY` IntegrityError because the twin's `users` table had no row for
+  `RAWOS_ENTITY_USER_ID`. Seeded twin DB with prod's row.
+
+Results:
+- **Step 7 (commit-path)**: real `arm_and_swap` -> `os._exit(0)` -> systemd respawn ->
+  `boot_liveness_commit -> committed` (old=`bf9cc46a` new=`19655a7d`). Deadman disarmed,
+  `pending.json` cleared, HEAD==new_sha, `/health`=200. Verified via git/systemctl/curl/journalctl.
+- **Step 8 (revert-path)**: armed a deliberately-broken `new_sha` (lifespan hangs before
+  `yield` via `await asyncio.sleep(99999)`, passes preflight's import+smoke check via the
+  TestClient-without-`with` gap but never serves `/health` for real). Result:
+  `boot_liveness_commit -> liveness_failed` at armed_at+~155s, deadman fired at
+  armed_at+~194s, `rawos-selfprobe-revert` ran `git reset --hard <old_sha>` and restarted
+  the twin. Recovery confirmed: HEAD==old_sha (`19655a7d`), `pending.json` removed, 0
+  timers left, `/health`=200 on a fresh PID.
+
+Both the success path (commit) and the failure path (revert) of the self-reload mechanism
+are now proven independently of the earlier production no-op above. Dormancy confirmed
+unchanged: `self_reload_enabled=False`, `self_reload_autonomous_enabled=False`,
+`self_reload_debug_endpoint_enabled=False`, no overrides in `/root/rawos/.env`. Twin
+(`rawos-selfprobe.service`, `/root/rawos-selfprobe-tree`, `/root/.rawos-selfprobe`,
+`/usr/local/bin/rawos-selfprobe-revert`) removed after verification.
