@@ -1024,8 +1024,67 @@ def list_self_reload_history(limit: int = 20) -> list[dict]:
         rows = conn.execute(
             """SELECT old_sha, new_sha, outcome, autonomous, created_at
                FROM managed_self_reload
-               ORDER BY created_at DESC, id DESC
+               ORDER BY rowid DESC
                LIMIT ?""",
             (limit,),
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+# ---------------------------------------------------------------------------
+# M3 — Owned-Resource Operator (R-own) outcome ledger (owned_resource_history)
+# ---------------------------------------------------------------------------
+
+def record_owned_op_outcome(
+    op_type: str,
+    target_summary: str,
+    outcome: str,
+    *,
+    autonomous: bool = False,
+    trash_ref: str | None = None,
+) -> None:
+    """Append one row to the owned-resource-history ledger (I-OWN6).
+
+    outcome must be one of 'applied' | 'proposed' | 'refused' | 'failed'
+    (enforced by migration 028 CHECK constraint — invalid values raise
+    sqlite3.IntegrityError).
+    autonomous=True when triggered by _maybe_autonomous_owned_maintenance().
+    """
+    with _conn() as conn:
+        conn.execute(
+            """INSERT INTO owned_resource_history
+               (op_type, target_summary, outcome, autonomous, trash_ref)
+               VALUES (?, ?, ?, ?, ?)""",
+            (op_type, target_summary, outcome, 1 if autonomous else 0, trash_ref),
+        )
+
+
+def list_owned_resource_history(limit: int = 20) -> list[dict]:
+    """Return the most recent owned-resource outcomes, newest first."""
+    with _conn() as conn:
+        rows = conn.execute(
+            """SELECT id, op_type, target_summary, outcome, autonomous, trash_ref, created_at
+               FROM owned_resource_history
+               ORDER BY rowid DESC
+               LIMIT ?""",
+            (limit,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def get_active_workspace_dirs() -> list[str]:
+    """Return workdir paths of projects bound to non-terminal intents.
+
+    Used by owned-resource GC to protect workspaces that are currently in use
+    (I-OWN2: active-intent workspace floor).
+    """
+    with _conn() as conn:
+        rows = conn.execute(
+            """SELECT DISTINCT p.workdir
+               FROM projects p
+               INNER JOIN intents i ON i.project_id = p.id
+               WHERE i.status IN ('executing', 'pending', 'routing')
+                 AND p.workdir IS NOT NULL
+                 AND p.workdir != ''""",
+        ).fetchall()
+    return [row[workdir] for row in rows]

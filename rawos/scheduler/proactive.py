@@ -1885,6 +1885,76 @@ async def _maybe_autonomous_self_reload() -> None:
         log.debug("autonomous self-reload proposed (not applied): %s", outcome.reason)
 
 
+async def _maybe_autonomous_owned_maintenance() -> None:
+    """M3 autonomous owned-resource maintenance (I-OWN4/5, operator_owned_enabled gate).
+
+    Dormant by default (settings.operator_owned_enabled=False). When enabled
+    and the operation class has graduated, moves stale workspaces to trash
+    autonomously (reversible via data/.trash/). Called once per self-probe
+    cycle (SELF_PROBE_INTERVAL_S = 6h) -- cheap scan when nothing eligible.
+    """
+    if not settings.operator_owned_enabled:
+        return
+    from pathlib import Path as _Path
+    import time as _time
+    import rawos.db as _db_mod
+    from rawos.kernel.owned_resource import (
+        OwnedResourceRefusalError,
+        OwnedOpSpec,
+        get_default_kernel,
+    )
+
+    kernel = get_default_kernel()
+    active_dirs = frozenset(_db_mod.get_active_workspace_dirs())
+    workspaces_root = _Path(settings.workspaces_root)
+    trash_root = str(_Path(settings.rawos_source_root) / "data" / ".trash")
+    min_age_s = settings.owned_workspace_min_age_days * 86400
+    _loop = asyncio.get_event_loop()
+    now = _time.time()
+
+    for ws_dir in workspaces_root.iterdir():
+        if not ws_dir.is_dir():
+            continue
+        try:
+            mtime = ws_dir.stat().st_mtime
+        except OSError:
+            continue
+        if (now - mtime) < min_age_s:
+            continue
+        if str(ws_dir.resolve()) in active_dirs:
+            continue
+
+        spec = OwnedOpSpec(
+            op_type="workspace_gc",
+            target_path=str(ws_dir),
+            trash_root=trash_root,
+        )
+        try:
+            outcome = await _loop.run_in_executor(
+                None,
+                lambda s=spec: kernel.operate_on_owned_resource(
+                    user_id=RAWOS_ENTITY_USER_ID,
+                    op_spec=s,
+                    active_workspace_dirs=active_dirs,
+                ),
+            )
+        except OwnedResourceRefusalError:
+            log.debug("owned GC refused for %s", ws_dir)
+            continue
+        except Exception:
+            log.exception("owned GC unexpected error for %s", ws_dir)
+            continue
+
+        if outcome.auto_applied:
+            log.info(
+                "autonomous owned GC: trashed %s -> %s", ws_dir, outcome.trash_path
+            )
+        elif outcome.proposed:
+            log.debug(
+                "owned GC proposed (not applied): %s -- %s", ws_dir, outcome.reason
+            )
+
+
 async def rawos_self_probe_loop() -> None:
     """
     Phase 16 self-modification entry point.
@@ -1909,6 +1979,7 @@ async def rawos_self_probe_loop() -> None:
     log.info("rawos self-probe loop started (interval=%ds)", SELF_PROBE_INTERVAL_S)
     while True:
         try:
+            await _maybe_autonomous_owned_maintenance()
             await _maybe_autonomous_self_reload()
             await _run_self_probe_cycle()
         except asyncio.CancelledError:

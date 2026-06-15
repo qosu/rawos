@@ -115,6 +115,16 @@ class Settings(BaseSettings):
     # self_reload_autonomous_enabled AND graduation; both must be True to auto-apply.
     self_reload_autonomous_enabled: bool = False  # I-SR10: dormant until graduation proven
 
+    # M3 — Owned-Resource Operator (R-own). Ships dormant; flip after twin-prove of
+    # workspace GC cycle with reversibility verified (first standing authority).
+    operator_owned_enabled: bool = False
+    # Workspace GC: move-to-trash after retention_days idle (floor: min_age_days).
+    # Hard-delete trash after trash_retention_days. GC threshold triggers autonomous scan.
+    owned_workspace_retention_days: int = 30
+    owned_workspace_min_age_days: int = 7
+    owned_trash_retention_days: int = 30
+    owned_workspace_gc_threshold_gb: float = 2.0
+
     # Phase 20 — system perception
     system_perception_enabled: bool = False
     system_perception_paths: list[str] = ["/root/rawos", "/etc/rawos", "/etc/systemd/system"]

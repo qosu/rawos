@@ -1034,6 +1034,139 @@ async def _manage_pam(params: dict[str, Any], workdir: str) -> ToolResult:
         success=False, duration_ms=_ms(),
     )
 
+
+async def _manage_owned_resource(params: dict, workdir: str) -> "ToolResult":
+    """M3 R-own: manage owned-resource lifecycle (workspace GC, DB vacuum).
+
+    action="gc"             -- propose or auto-apply workspace GC for target_path
+    action="approved_apply" -- owner path: bypass gate, apply immediately
+    action="status"         -- show graduation + recent history
+    action="restore"        -- restore a trashed workspace from trash_path
+    action="reap"           -- hard-delete trash older than retention window
+    """
+    import time as _time
+    ctx = _get_agent_context()
+    if ctx is None:
+        return ToolResult(output="manage_owned_resource: no active agent context", success=False, duration_ms=0)
+    user_id: str = ctx["user_id"]
+
+    action = params.get("action", "")
+    target_path: str = params.get("target_path", "")
+    t0 = _time.monotonic()
+
+    def _ms() -> int:
+        return int((_time.monotonic() - t0) * 1000)
+
+    from rawos.kernel.owned_resource import (
+        OwnedOpSpec,
+        OwnedResourceRefusalError,
+        get_default_kernel,
+    )
+    import rawos.db as _db
+
+    kernel = get_default_kernel()
+
+    if action == "gc":
+        if not target_path:
+            return ToolResult(
+                output="manage_owned_resource gc: target_path required",
+                success=False, duration_ms=_ms(),
+            )
+        active_dirs = frozenset(_db.get_active_workspace_dirs())
+        trash_root = params.get("trash_root") or None
+        spec = OwnedOpSpec(op_type="workspace_gc", target_path=target_path, trash_root=trash_root)
+        try:
+            outcome = kernel.operate_on_owned_resource(
+                user_id=user_id, op_spec=spec, active_workspace_dirs=active_dirs
+            )
+        except OwnedResourceRefusalError as exc:
+            return ToolResult(output=f"refused (ownership floor): {exc}", success=False, duration_ms=_ms())
+        if outcome.auto_applied:
+            return ToolResult(
+                output=f"auto-applied: trashed {target_path}\n  trash: {outcome.trash_path}",
+                success=True, duration_ms=_ms(),
+            )
+        return ToolResult(
+            output=(
+                f"proposed (not applied): {target_path}\n"
+                f"reason: {outcome.reason}\n"
+                "Call manage_owned_resource(action='approved_apply', ...) after review."
+            ),
+            success=True, duration_ms=_ms(),
+        )
+
+    if action == "approved_apply":
+        if not target_path:
+            return ToolResult(
+                output="manage_owned_resource approved_apply: target_path required",
+                success=False, duration_ms=_ms(),
+            )
+        active_dirs = frozenset(_db.get_active_workspace_dirs())
+        trash_root = params.get("trash_root") or None
+        spec = OwnedOpSpec(op_type="workspace_gc", target_path=target_path, trash_root=trash_root)
+        try:
+            result = kernel.execute_approved_owned_op(
+                user_id=user_id, op_spec=spec, active_workspace_dirs=active_dirs
+            )
+        except OwnedResourceRefusalError as exc:
+            return ToolResult(output=f"refused (ownership floor): {exc}", success=False, duration_ms=_ms())
+        return ToolResult(
+            output=f"applied: trashed {target_path}\n  trash: {result.trash_path}",
+            success=True, duration_ms=_ms(),
+        )
+
+    if action == "restore":
+        trash_path: str = params.get("trash_path", "")
+        if not trash_path:
+            return ToolResult(
+                output="manage_owned_resource restore: trash_path required",
+                success=False, duration_ms=_ms(),
+            )
+        try:
+            kernel.restore_from_trash(trash_path)
+        except (FileNotFoundError, FileExistsError, OwnedResourceRefusalError) as exc:
+            return ToolResult(output=f"restore failed: {exc}", success=False, duration_ms=_ms())
+        return ToolResult(output=f"restored from trash: {trash_path}", success=True, duration_ms=_ms())
+
+    if action == "reap":
+        from rawos.config import settings as _s
+        trash_root = params.get("trash_root") or str(
+            __import__("pathlib").Path(_s.rawos_source_root) / "data" / ".trash"
+        )
+        retention_days = int(params.get("retention_days", _s.owned_trash_retention_days))
+        reaped = kernel.reap_trash(trash_root=trash_root, retention_days=retention_days)
+        return ToolResult(
+            output=f"reaped {len(reaped)} trash entries (older than {retention_days}d)",
+            success=True, duration_ms=_ms(),
+        )
+
+    if action == "status":
+        from rawos.config import settings as _s
+        history = _db.list_owned_resource_history(limit=5)
+        history_lines = [
+            f"  {r['op_type']} {r['outcome']} auto={bool(r['autonomous'])} @ {r['created_at']}"
+            for r in history
+        ] or ["  (no history)"]
+        track_ws = _db.get_operator_track_record(user_id, "owned_workspace_gc", _s.workspaces_root)
+        track_db = _db.get_operator_track_record(user_id, "owned_db_vacuum", _s.rawos_source_root)
+        output = (
+            f"operator_owned_enabled: {_s.operator_owned_enabled}\n"
+            f"workspace_gc:  graduated={track_ws.graduated} verified={track_ws.verified_successes}\n"
+            f"db_vacuum:     graduated={track_db.graduated} verified={track_db.verified_successes}\n"
+            "recent history (newest first):\n"
+            + "\n".join(history_lines)
+        )
+        return ToolResult(output=output, success=True, duration_ms=_ms())
+
+    return ToolResult(
+        output=(
+            f"manage_owned_resource: unknown action {action!r}. "
+            "Valid: gc, approved_apply, restore, reap, status"
+        ),
+        success=False, duration_ms=_ms(),
+    )
+
+
 REGISTRY: dict[str, ToolFn] = {
     "bash":           _bash,
     "bash_readonly":  _bash_readonly,
@@ -1047,6 +1180,7 @@ REGISTRY: dict[str, ToolFn] = {
     "manage_file":    _manage_file,
     "manage_service": _manage_service,
     "manage_pam":     _manage_pam,
+    "manage_owned_resource": _manage_owned_resource,
 }
 
 TOOL_DEFINITIONS: list[dict] = [
@@ -1312,6 +1446,52 @@ TOOL_DEFINITIONS: list[dict] = [
                 },
             },
         },
+    {
+        "type": "function",
+        "function": {
+            "name": "manage_owned_resource",
+            "description": (
+                "M3 R-own: lifecycle management over rawos owned namespace "
+                "(workspaces, data artefacts). Boundary-enforced: cannot reach "
+                "system-level paths outside owned roots (I-OWN1). "
+                "Reversible: deletion = move-to-trash, restorable until retention window. "
+                "actions: gc (propose/auto-apply workspace GC), "
+                "approved_apply (owner path, bypass gate), "
+                "restore (restore from trash), reap (hard-delete old trash), "
+                "status (show graduation + history)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "description": "One of: gc, approved_apply, restore, reap, status",
+                    },
+                    "target_path": {
+                        "type": "string",
+                        "description": (
+                            "Absolute path to the workspace dir to GC or apply. "
+                            "Must be inside an owned root (workspaces_root or data/). "
+                            "Required for gc and approved_apply."
+                        ),
+                    },
+                    "trash_root": {
+                        "type": "string",
+                        "description": "Override trash root dir. Default: rawos_source_root/data/.trash",
+                    },
+                    "trash_path": {
+                        "type": "string",
+                        "description": "Trash entry path for restore action.",
+                    },
+                    "retention_days": {
+                        "type": "integer",
+                        "description": "Override retention window for reap action.",
+                    },
+                },
+                "required": ["action"],
+            },
+        },
+    }
 ]
 
 
