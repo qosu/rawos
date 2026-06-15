@@ -14,6 +14,8 @@ new_sha is always "NEWSHA" unless a test says otherwise.
 """
 from __future__ import annotations
 
+import sys
+
 import hashlib
 import json
 import os
@@ -229,7 +231,7 @@ class TestPreflightRefusals:
 
     def test_refuses_on_import_error(self, tmp_path: Path) -> None:
         runner = _runner({
-            ("python3", "-c", "import rawos.api.app"):
+            (sys.executable, "-c", "import rawos.api.app"):
                 FakeResult(returncode=1, stderr="ModuleNotFoundError: no module named 'rawos'"),
         })
         with pytest.raises(SelfReloadPreflightError, match="import"):
@@ -237,7 +239,7 @@ class TestPreflightRefusals:
 
     def test_refuses_on_test_subset_failure(self, tmp_path: Path) -> None:
         runner = _runner({
-            ("python3", "-m", "pytest", "-q", "-m", "self_reload_smoke"):
+            (sys.executable, "-m", "pytest", "-q", "-m", "self_reload_smoke"):
                 FakeResult(returncode=1, stdout="1 failed"),
         })
         with pytest.raises(SelfReloadPreflightError, match="smoke"):

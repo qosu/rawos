@@ -71,6 +71,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import time
 import uuid
 from dataclasses import dataclass
@@ -292,11 +293,11 @@ def preflight_stage(
     worktree = _worktree or _WorktreeManager()
     wt_path = worktree.create(source_root, new_sha)
     try:
-        imp = runner.run(["python3", "-c", "import rawos.api.app"], cwd=wt_path)
+        imp = runner.run([sys.executable, "-c", "import rawos.api.app"], cwd=wt_path)
         if imp.returncode != 0:
             raise SelfReloadPreflightError(f"preflight import check failed: {imp.stderr.strip()}")
 
-        test = runner.run(["python3", "-m", "pytest", "-q", "-m", "self_reload_smoke"], cwd=wt_path)
+        test = runner.run([sys.executable, "-m", "pytest", "-q", "-m", "self_reload_smoke"], cwd=wt_path)
         if test.returncode != 0:
             raise SelfReloadPreflightError(
                 f"preflight self_reload_smoke test subset failed:\n{test.stdout[-2000:]}"
