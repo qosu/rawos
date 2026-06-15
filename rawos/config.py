@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     # Arch paths — configurable so non-Linux backends can point to their own roots
     worktree_root: str = "/root/.rawos-worktrees"
     rawos_source_root: str = "/root/rawos"
+    # Phase 25 self-reload pending-state dir -- config-driven so a
+    # twin-prove process (separate .env) gets its own state dir without
+    # per-call injection (mirrors rawos_source_root above).
+    self_reload_state_dir: str = "/root/.rawos-selfreload"
 
     # Database
     db_path: str = "/root/rawos/data/rawos.db"

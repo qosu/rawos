@@ -85,7 +85,7 @@ from rawos.config import settings
 
 SOURCE_ROOT = settings.rawos_source_root
 
-SELF_RELOAD_STATE_DIR = "/root/.rawos-selfreload"
+SELF_RELOAD_STATE_DIR = settings.self_reload_state_dir
 SELF_RELOAD_STATE_FILENAME = "pending.json"
 SELF_RELOAD_WORKTREE_ROOT = "/root/.rawos-selfreload-worktrees"
 

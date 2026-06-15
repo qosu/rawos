@@ -28,6 +28,7 @@ import rawos.db as db
 from rawos.kernel.self_reload import (
     SELF_RELOAD_DEADMAN_DELAY_S,
     SELF_RELOAD_DEADMAN_UNIT,
+    SELF_RELOAD_STATE_DIR,
     SelfReloadOperateOutcome,
     SelfReloadPreflightError,
     SelfReloadRefusalError,
@@ -41,6 +42,25 @@ from rawos.kernel.self_reload import (
 )
 from rawos.kernel.track_record import GRADUATION_THRESHOLD
 from rawos.models import User
+
+
+# ---------------------------------------------------------------------------
+# Config-driven state dir (mirrors SOURCE_ROOT = settings.rawos_source_root)
+# ---------------------------------------------------------------------------
+
+class TestConfigDrivenStateDir:
+    """SELF_RELOAD_STATE_DIR must be config-driven, mirroring
+    SOURCE_ROOT = settings.rawos_source_root -- so a twin-prove process (its
+    own .env, its own settings instance) gets its own state dir without
+    per-call _state_dir injection, and both arm_and_swap and the automatic
+    boot-commit task (app.py::_self_reload_boot_commit_task, which never
+    passes _state_dir) agree on the same path."""
+
+    def test_state_dir_reflects_settings(self) -> None:
+        from rawos.config import settings
+
+        assert SELF_RELOAD_STATE_DIR == settings.self_reload_state_dir
+        assert settings.self_reload_state_dir == "/root/.rawos-selfreload"
 
 
 # ---------------------------------------------------------------------------
