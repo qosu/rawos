@@ -76,6 +76,7 @@ async def lifespan(app: FastAPI):
     system_fs_reflex_task = asyncio.create_task(_start_system_fs_reflex(),              name="system-fs-reflex")
     kernel_perception_task = asyncio.create_task(_start_kernel_perception_loop(),       name="kernel-perception")
     selfreload_task    = asyncio.create_task(_self_reload_boot_commit_task(),       name="self-reload-boot-commit")
+    venv_boot_task     = asyncio.create_task(_venv_boot_commit_task(),                name="venv-boot-commit")
     _telegram_gate     = await _start_telegram_gate()
 
     # Clean up intents orphaned by crash/restart — any still 'executing' after
@@ -106,7 +107,8 @@ async def lifespan(app: FastAPI):
     system_fs_reflex_task.cancel()
     kernel_perception_task.cancel()
     selfreload_task.cancel()
-    await asyncio.gather(db_sync_task, proactive_task, watcher_task, snapshot_task, calendar_task, autonomous_task, self_probe_task, narrative_task, operator_scan_task, system_fs_reflex_task, kernel_perception_task, selfreload_task, return_exceptions=True)
+    venv_boot_task.cancel()
+    await asyncio.gather(db_sync_task, proactive_task, watcher_task, snapshot_task, calendar_task, autonomous_task, self_probe_task, narrative_task, operator_scan_task, system_fs_reflex_task, kernel_perception_task, selfreload_task, venv_boot_task, return_exceptions=True)
     stop_system_perception()
     stop_filesystem_watcher()
     _log.info("rawos shutdown complete")
@@ -213,6 +215,72 @@ async def _self_reload_boot_commit_task() -> None:
     except Exception:
         _log.exception("self-reload: failed to update track record for outcome %s", outcome)
 
+
+
+async def _venv_boot_commit_task() -> None:
+    """Resolve any pending venv swap from a prior `rawos-venv-revert` arm.
+
+    M3 Stage 2 (dormant unless arm_and_swap_venv is in flight — see
+    kernel/venv_operator.py). Runs once at boot, AFTER the ASGI app is
+    accepting requests so the /health probe below succeeds.
+
+    On "committed"/"liveness_failed" the outcome is appended to the
+    venv_operator_history ledger. Never raises — failure must not prevent
+    rawos from serving.
+    """
+    import json as _json
+    from pathlib import Path as _Path
+    import time as _time
+
+    import httpx
+
+    from rawos.kernel.venv_operator import (
+        VENV_STATE_DIR,
+        VENV_STATE_FILENAME,
+        boot_venv_commit,
+    )
+
+    state_path = _Path(VENV_STATE_DIR) / VENV_STATE_FILENAME
+    if not state_path.exists():
+        return
+
+    try:
+        pending = _json.loads(state_path.read_text())
+        frozen_before = pending.get("frozen_hash_before", "")
+        frozen_after = pending.get("frozen_hash_after", "")
+    except Exception:
+        _log.exception("venv-boot-commit: state.json unreadable — leaving deadman armed")
+        return
+
+    def _probe() -> bool:
+        try:
+            resp = httpx.get(f"http://127.0.0.1:{settings.port}/health", timeout=2.0)
+            return resp.status_code == 200
+        except Exception:
+            return False
+
+    loop = asyncio.get_event_loop()
+    try:
+        outcome = await loop.run_in_executor(None, lambda: boot_venv_commit(_probe=_probe))
+    except Exception:
+        _log.exception("venv-boot-commit: boot_venv_commit raised — leaving deadman armed")
+        return
+
+    if outcome == "no_pending":
+        return
+
+    _log.info("venv-boot-commit: outcome=%s frozen_before=%s frozen_after=%s",
+              outcome, frozen_before[:16], frozen_after[:16])
+    try:
+        db.record_venv_op_outcome(
+            op_type="dep_update",
+            frozen_hash_before=frozen_before,
+            frozen_hash_after=frozen_after,
+            outcome=outcome if outcome in ("applied", "proposed", "liveness_failed", "preflight_failed") else "liveness_failed",
+            autonomous=False,
+        )
+    except Exception:
+        _log.exception("venv-boot-commit: failed to record outcome %s in ledger", outcome)
 
 async def _start_autonomous_scan() -> None:
     from rawos.scheduler.proactive import autonomous_server_scan_loop

@@ -125,6 +125,14 @@ class Settings(BaseSettings):
     owned_trash_retention_days: int = 30
     owned_workspace_gc_threshold_gb: float = 2.0
 
+    # M3 Stage 2 — R-venv: reversible dependency operator (I-VENV1..9).
+    # Ships dormant (operator_venv_enabled=False). Owner flip after twin-prove.
+    # Blast radius = no-boot → NEVER auto-activate without manual verification.
+    operator_venv_enabled: bool = False
+    venv_deadman_delay_s: int = 300
+    venv_staging_root: str = '/root/rawos'  # .venvs/ lives here
+    venv_old_retention_days: int = 7        # reap old venv after committed + N days
+
     # Phase 20 — system perception
     system_perception_enabled: bool = False
     system_perception_paths: list[str] = ["/root/rawos", "/etc/rawos", "/etc/systemd/system"]

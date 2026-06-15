@@ -1088,3 +1088,46 @@ def get_active_workspace_dirs() -> list[str]:
                  AND p.workdir != ''""",
         ).fetchall()
     return [row[workdir] for row in rows]
+
+
+# ---------------------------------------------------------------------------
+# M3 Stage 2 — R-venv operator outcome ledger (venv_operator_history)
+# ---------------------------------------------------------------------------
+
+def record_venv_op_outcome(
+    op_type: str,
+    frozen_hash_before: str,
+    frozen_hash_after: str,
+    outcome: str,
+    *,
+    autonomous: bool = False,
+    deadman_unit: str | None = None,
+) -> None:
+    """Append one row to the venv-operator history ledger.
+
+    outcome must be one of 'applied' | 'proposed' | 'liveness_failed' |
+    'preflight_failed' (enforced by migration 029 CHECK constraint).
+    autonomous=True reserved for future; currently always False (I-VENV6).
+    """
+    with _conn() as conn:
+        conn.execute(
+            """INSERT INTO venv_operator_history
+               (op_type, frozen_hash_before, frozen_hash_after, outcome, autonomous, deadman_unit)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (op_type, frozen_hash_before, frozen_hash_after, outcome,
+             1 if autonomous else 0, deadman_unit),
+        )
+
+
+def list_venv_op_history(limit: int = 20) -> list[dict]:
+    """Return the most recent venv-operator outcomes, newest first."""
+    with _conn() as conn:
+        rows = conn.execute(
+            """SELECT id, op_type, frozen_hash_before, frozen_hash_after,
+                      outcome, autonomous, deadman_unit, created_at
+               FROM venv_operator_history
+               ORDER BY rowid DESC
+               LIMIT ?""",
+            (limit,),
+        ).fetchall()
+    return [dict(row) for row in rows]

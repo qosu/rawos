@@ -1167,6 +1167,96 @@ async def _manage_owned_resource(params: dict, workdir: str) -> "ToolResult":
     )
 
 
+
+async def _manage_venv(params: dict, workdir: str) -> "ToolResult":
+    """M3 Stage 2 R-venv: reversible dependency operator.
+
+    action="propose"         -- stage candidate + run preflight; report hash delta
+    action="approved_apply"  -- owner path: bypass gate, preflight + arm_and_swap
+    action="status"          -- show graduation + recent venv history
+    """
+    import time as _time
+    ctx = _get_agent_context()
+    if ctx is None:
+        return ToolResult(output="manage_venv: no active agent context", success=False, duration_ms=0)
+    user_id: str = ctx["user_id"]
+
+    action = params.get("action", "")
+    t0 = _time.monotonic()
+
+    def _ms() -> int:
+        return int((_time.monotonic() - t0) * 1000)
+
+    from rawos.kernel.venv_operator import (
+        VenvDepSpec,
+        VenvPreflightError,
+        VenvStateError,
+        execute_approved_venv_op,
+        operate_on_venv,
+    )
+    import rawos.db as _db
+    from rawos.config import settings as _s
+
+    requirements: list[str] = params.get("requirements", [])
+    if isinstance(requirements, str):
+        requirements = [r.strip() for r in requirements.split(",") if r.strip()]
+
+    if action == "propose":
+        dep_spec = VenvDepSpec(requirements=requirements)
+        try:
+            outcome = operate_on_venv(user_id, dep_spec)
+        except (VenvPreflightError, VenvStateError) as exc:
+            return ToolResult(output=f"venv propose failed: {exc}", success=False, duration_ms=_ms())
+        if outcome.auto_applied:
+            return ToolResult(
+                output=f"auto-applied: venv swapped to candidate (service restarting)",
+                success=True, duration_ms=_ms(),
+            )
+        return ToolResult(
+            output=(
+                f"proposed (not applied): {outcome.reason}\n"
+                "Use manage_venv(action='approved_apply', ...) after review."
+            ),
+            success=True, duration_ms=_ms(),
+        )
+
+    if action == "approved_apply":
+        dep_spec = VenvDepSpec(requirements=requirements)
+        try:
+            outcome = execute_approved_venv_op(user_id, dep_spec)
+        except VenvPreflightError as exc:
+            return ToolResult(output=f"preflight failed: {exc}", success=False, duration_ms=_ms())
+        except VenvStateError as exc:
+            return ToolResult(output=f"single-flight conflict: {exc}", success=False, duration_ms=_ms())
+        return ToolResult(
+            output=f"applied: venv swapped to candidate (service restarting)",
+            success=True, duration_ms=_ms(),
+        )
+
+    if action == "status":
+        history = _db.list_venv_op_history(limit=5)
+        history_lines = [
+            f"  {r['op_type']} {r['outcome']} auto={bool(r['autonomous'])} @ {r['created_at']}"
+            for r in history
+        ] or ["  (no history)"]
+        track_ws = _db.get_operator_track_record(user_id, "venv_dep_update", _s.rawos_source_root)
+        output = (
+            f"operator_venv_enabled: {_s.operator_venv_enabled}\n"
+            f"venv_dep_update: graduated={track_ws.graduated} verified={track_ws.verified_successes}\n"
+            "recent history (newest first):\n"
+            + "\n".join(history_lines)
+        )
+        return ToolResult(output=output, success=True, duration_ms=_ms())
+
+    return ToolResult(
+        output=(
+            f"manage_venv: unknown action {action!r}. "
+            "Valid: propose, approved_apply, status"
+        ),
+        success=False, duration_ms=_ms(),
+    )
+
+
 REGISTRY: dict[str, ToolFn] = {
     "bash":           _bash,
     "bash_readonly":  _bash_readonly,
@@ -1181,6 +1271,7 @@ REGISTRY: dict[str, ToolFn] = {
     "manage_service": _manage_service,
     "manage_pam":     _manage_pam,
     "manage_owned_resource": _manage_owned_resource,
+    "manage_venv":           _manage_venv,
 }
 
 TOOL_DEFINITIONS: list[dict] = [
@@ -1491,8 +1582,38 @@ TOOL_DEFINITIONS: list[dict] = [
                 "required": ["action"],
             },
         },
-    }
-]
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "manage_venv",
+            "description": (
+                "M3 Stage 2 R-venv: reversible Python dependency operator. "
+                "Builds a candidate venv, proves it (import rawos.api.app + smoke tests), "
+                "then swaps via rename with a deadman timer for auto-revert on no-boot. "
+                "DORMANT by default (operator_venv_enabled=False) — propose-only until owner activates. "
+                "actions: propose (gate-gated), approved_apply (owner path), status."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "description": "One of: propose, approved_apply, status",
+                    },
+                    "requirements": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "pip-installable specs, e.g. ['requests==2.31', 'httpx>=0.26']. "
+                            "Required for propose and approved_apply."
+                        ),
+                    },
+                },
+                "required": ["action"],
+            },
+        },
+    }]
 
 
 # ---------------------------------------------------------------------------
