@@ -219,3 +219,115 @@ class TestInternalSelfReload:
         )
         assert r.status_code == 200
         assert calls == ["deadbeef"]
+
+
+class TestInternalSelfReloadDebugArmAndSwap:
+    """Phase 25 twin-prove -- /internal/self-reload/_debug-arm-and-swap.
+
+    Disabled by default (404). When settings.self_reload_debug_endpoint_enabled
+    is True (twin .env only), runs preflight_stage + arm_and_swap directly with
+    _revert_cmd overridden to /usr/local/bin/rawos-selfprobe-revert -- never
+    execute_owner_self_reload (I-SR6 prod funnel, hardcodes the prod revert
+    script which targets /root/rawos + `systemctl restart rawos`).
+    """
+
+    def test_disabled_by_default_returns_404(self, monkeypatch):
+        import rawos.kernel.self_reload as self_reload
+
+        monkeypatch.setattr(self_reload.settings, "self_reload_debug_endpoint_enabled", False)
+        r = client.post(
+            "/internal/self-reload/_debug-arm-and-swap",
+            json={"new_sha": "deadbeef"},
+            headers={"X-Forwarded-For": "127.0.0.1"},
+        )
+        assert r.status_code == 404
+
+    def test_refuses_remote_request(self, monkeypatch):
+        import rawos.kernel.self_reload as self_reload
+
+        monkeypatch.setattr(self_reload.settings, "self_reload_debug_endpoint_enabled", True)
+        r = client.post(
+            "/internal/self-reload/_debug-arm-and-swap",
+            json={"new_sha": "deadbeef"},
+            headers={"X-Forwarded-For": "203.0.113.5"},
+        )
+        assert r.status_code == 403
+
+    def test_missing_new_sha(self, monkeypatch):
+        import rawos.kernel.self_reload as self_reload
+
+        monkeypatch.setattr(self_reload.settings, "self_reload_debug_endpoint_enabled", True)
+        r = client.post(
+            "/internal/self-reload/_debug-arm-and-swap",
+            json={},
+            headers={"X-Forwarded-For": "127.0.0.1"},
+        )
+        assert r.status_code == 400
+
+    def test_preflight_error_returns_409(self, monkeypatch):
+        import rawos.kernel.self_reload as self_reload
+
+        monkeypatch.setattr(self_reload.settings, "self_reload_debug_endpoint_enabled", True)
+
+        def _raise(*args, **kwargs):
+            raise self_reload.SelfReloadPreflightError("boom")
+
+        monkeypatch.setattr(self_reload, "preflight_stage", _raise)
+        r = client.post(
+            "/internal/self-reload/_debug-arm-and-swap",
+            json={"new_sha": "deadbeef"},
+            headers={"X-Forwarded-For": "127.0.0.1"},
+        )
+        assert r.status_code == 409
+        assert "boom" in r.json()["detail"]
+
+    def test_state_error_returns_409(self, monkeypatch):
+        import rawos.kernel.self_reload as self_reload
+
+        monkeypatch.setattr(self_reload.settings, "self_reload_debug_endpoint_enabled", True)
+        snap = self_reload.SelfReloadSnapshot(
+            old_sha="OLDSHA", new_sha="deadbeef", state_id="state-1",
+            armed_at=0.0, deadman_unit=self_reload.SELF_RELOAD_DEADMAN_UNIT,
+            migration_delta=[], venv_frozen_hash="hash",
+        )
+        monkeypatch.setattr(self_reload, "preflight_stage", lambda *a, **k: snap)
+
+        def _raise(*args, **kwargs):
+            raise self_reload.SelfReloadStateError("pending")
+
+        monkeypatch.setattr(self_reload, "arm_and_swap", _raise)
+        r = client.post(
+            "/internal/self-reload/_debug-arm-and-swap",
+            json={"new_sha": "deadbeef"},
+            headers={"X-Forwarded-For": "127.0.0.1"},
+        )
+        assert r.status_code == 409
+        assert "pending" in r.json()["detail"]
+
+    def test_calls_arm_and_swap_with_selfprobe_revert_cmd(self, monkeypatch):
+        import rawos.kernel.self_reload as self_reload
+
+        monkeypatch.setattr(self_reload.settings, "self_reload_debug_endpoint_enabled", True)
+        snap = self_reload.SelfReloadSnapshot(
+            old_sha="abc1234", new_sha="deadbeef", state_id="state-xyz",
+            armed_at=0.0, deadman_unit=self_reload.SELF_RELOAD_DEADMAN_UNIT,
+            migration_delta=[], venv_frozen_hash="hash",
+        )
+        monkeypatch.setattr(self_reload, "preflight_stage", lambda *a, **k: snap)
+
+        calls = []
+
+        def _stub(snap_arg, **kwargs):
+            calls.append((snap_arg, kwargs))
+
+        monkeypatch.setattr(self_reload, "arm_and_swap", _stub)
+        r = client.post(
+            "/internal/self-reload/_debug-arm-and-swap",
+            json={"new_sha": "deadbeef"},
+            headers={"X-Forwarded-For": "127.0.0.1"},
+        )
+        assert r.status_code == 200
+        assert len(calls) == 1
+        passed_snap, kwargs = calls[0]
+        assert passed_snap is snap
+        assert kwargs["_revert_cmd"] == "/usr/local/bin/rawos-selfprobe-revert abc1234 state-xyz"

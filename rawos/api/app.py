@@ -455,3 +455,58 @@ async def internal_self_reload_arm_and_go(request: Request):
     # execute_owner_self_reload calls os._exit(0) on success -- unreachable
     # in production. Reached only when a test monkeypatches it.
     return {"status": "armed"}
+
+
+@app.post("/internal/self-reload/_debug-arm-and-swap", include_in_schema=False)
+async def internal_self_reload_debug_arm_and_swap(request: Request):
+    """Phase 25 twin-prove ONLY -- 404 unless
+    settings.self_reload_debug_endpoint_enabled (twin .env only, default False).
+
+    Unlike /internal/self-reload/arm-and-go (I-SR6 owner funnel, which calls
+    execute_owner_self_reload -> arm_and_swap with the DEFAULT revert_cmd
+    /usr/local/bin/rawos-selfreload-revert), this calls preflight_stage +
+    arm_and_swap directly with _revert_cmd overridden to
+    /usr/local/bin/rawos-selfprobe-revert. The prod revert script hardcodes
+    REPO=/root/rawos + `systemctl restart rawos` -- armed by a twin process
+    (whose old_sha is a real commit in prod's history too, since the twin is
+    a clone of prod), its deadman firing would reset PROD's repo and restart
+    rawos.service. _revert_cmd injection keeps the twin's deadman scoped to
+    /root/rawos-selfprobe-tree + rawos-selfprobe.
+    """
+    from fastapi import HTTPException
+
+    if not settings.self_reload_debug_endpoint_enabled:
+        raise HTTPException(status_code=404)
+
+    client_ip = request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
+    if not client_ip:
+        client_ip = request.client.host if request.client else ""
+    if client_ip not in ("127.0.0.1", "::1", ""):
+        raise HTTPException(status_code=403, detail="self-reload not accessible remotely")
+
+    body = await request.json()
+    new_sha = body.get("new_sha", "")
+    if not new_sha:
+        raise HTTPException(status_code=400, detail="new_sha required")
+
+    from rawos.kernel.self_reload import (
+        SelfReloadPreflightError,
+        SelfReloadRefusalError,
+        SelfReloadStateError,
+        arm_and_swap,
+        preflight_stage,
+    )
+
+    try:
+        snap = preflight_stage(new_sha)
+    except (SelfReloadRefusalError, SelfReloadPreflightError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+    revert_cmd = f"/usr/local/bin/rawos-selfprobe-revert {snap.old_sha} {snap.state_id}"
+    try:
+        arm_and_swap(snap, _revert_cmd=revert_cmd)
+    except SelfReloadStateError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    # arm_and_swap calls os._exit(0) on success -- unreachable in production.
+    # Reached only when a test monkeypatches it.
+    return {"status": "armed"}

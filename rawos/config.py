@@ -118,6 +118,11 @@ class Settings(BaseSettings):
     # is a SEPARATE gate — operate_on_self_reload() checks self_reload_enabled AND
     # self_reload_autonomous_enabled AND graduation; both must be True to auto-apply.
     self_reload_autonomous_enabled: bool = False  # I-SR10: dormant until graduation proven
+    # Twin-prove only (Phase 25 verification step 3) -- gates
+    # /internal/self-reload/_debug-arm-and-swap. False on prod; the
+    # rawos-selfprobe twin's .env sets this True. Default False means the
+    # route 404s everywhere except the twin.
+    self_reload_debug_endpoint_enabled: bool = False
 
     # M3 — Owned-Resource Operator (R-own). Ships dormant; flip after twin-prove of
     # workspace GC cycle with reversibility verified (first standing authority).
