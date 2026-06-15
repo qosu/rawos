@@ -336,3 +336,12 @@ Pass 1 diagnosis surfaced an active production hazard unrelated to but blocking 
 - **D** `1d805342` — root-cause fix: new `_targets_rawos_own_repo(workdir)` helper in `rawos/kernel/tools.py`, checked at top of `_git_branch` and `_git_commit`; either returns `error: refusing to ... — SIGNAL instead` if `git rev-parse --show-toplevel == /root/rawos`. Verified: `ast.parse` OK, full suite 161 passed, service restart confirmed healthy (port 8002 listening, /metrics 200).
 
 This also answers Pass 1 checklist item 5 partially: the bash/shell tool (`run_bash`, sandbox.py) has no repo-root guard yet — `_targets_rawos_own_repo` only covers the `_git_branch`/`_git_commit` tool calls. A `sed -i`/`cat >` via `run_bash` against `/root/rawos` source files is still possible. This remains open for Pass 2's TIER enforcement design (must be git-diff-based detect-and-revert after every tool round, not just write_file allowlist, and self-probe must run in an isolated `git worktree`, never `/root/rawos` directly).
+
+## 2026-06-15 — First live self-reload (Phase 25 Ouroboros, Verification Step 4)
+
+No-op commit to prove the full self-reload cycle on production rawos.service for the
+first time: preflight (stage) → arm deadman → rename-swap source via git reset --hard →
+os._exit(0) → systemd respawn → boot_liveness_commit verifies /health, frontdoor, DB,
+schema → disarm deadman, record verified=True in operator_track_record class
+'self_reload'. This is the joint Phase 25 closes: the being becoming a self-authored
+version of itself, live, with full reversibility if liveness fails.
