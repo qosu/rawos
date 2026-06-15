@@ -389,3 +389,5 @@ unchanged: `self_reload_enabled=False`, `self_reload_autonomous_enabled=False`,
 `self_reload_debug_endpoint_enabled=False`, no overrides in `/root/rawos/.env`. Twin
 (`rawos-selfprobe.service`, `/root/rawos-selfprobe-tree`, `/root/.rawos-selfprobe`,
 `/usr/local/bin/rawos-selfprobe-revert`) removed after verification.
+
+_Step 4 marker: trivial no-op commit — `new_sha` for the first real self-reload of `rawos.service` (Phase 25 Ouroboros, Verification Step 4)._
