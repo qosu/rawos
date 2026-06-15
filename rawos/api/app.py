@@ -50,6 +50,12 @@ async def lifespan(app: FastAPI):
     if not settings.debug and len(settings.jwt_secret) < 32:
         _log.warning("JWT_SECRET shorter than 32 chars — use a longer secret in production.")
 
+    # Phase 26 -- I-LL4 fail-fast: if Landlock self-MAC is enabled but this
+    # kernel's ABI is below MIN_ABI, refuse to boot rather than silently run
+    # every run_bash call unsandboxed while claiming to be sandboxed.
+    from rawos.kernel import landlock
+    landlock.validate_boot_config(enabled=settings.landlock_self_mac_enabled)
+
     # Pre-warm ChromaDB + sentence-transformers
     from rawos.kernel.memory_index import warmup
     loop = asyncio.get_event_loop()

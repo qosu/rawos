@@ -64,6 +64,14 @@ async def run_bash(command: str, workdir: str) -> BashResult:
     # Wrap with resource limits via the arch backend's ShellPolicy
     wrapped, exec_kwargs = get_arch().shell_policy.wrap(command, workdir_abs)
 
+    # Phase 26 -- if the ShellPolicy attached a Landlock preexec_fn, its
+    # ruleset fd was opened in THIS (parent) process and is O_CLOEXEC.
+    # The forked child inherits it, consumes it in landlock_restrict_self,
+    # and drops it at exec(). The parent's copy is now redundant -- close
+    # it here (in `finally`, below) regardless of how launch goes, or it
+    # leaks one fd per run_bash call.
+    preexec_fd = getattr(exec_kwargs.get("preexec_fn"), "_ruleset_fd", None)
+
     start = time.monotonic()
     try:
         proc = await asyncio.create_subprocess_shell(
@@ -86,6 +94,9 @@ async def run_bash(command: str, workdir: str) -> BashResult:
             )
     except Exception as e:
         raise SandboxError(f"failed to launch subprocess: {e}") from e
+    finally:
+        if preexec_fd is not None:
+            os.close(preexec_fd)
 
     duration_ms = int((time.monotonic() - start) * 1000)
 

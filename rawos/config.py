@@ -158,6 +158,14 @@ class Settings(BaseSettings):
     ebpf_perception_debounce_s: float = 1.0
     ebpf_perception_respawn_backoff_s: float = 5.0
 
+    # Phase 26 — Landlock self-MAC (active enforcement, dormant)
+    landlock_self_mac_enabled: bool = False
+    # Dormant (I-LL3): run_bash's preexec_fn applies DEFAULT_BEING_ENVELOPE
+    # only when True AND landlock.supported() >= landlock.MIN_ABI (validated
+    # at boot -- I-LL4, see api/app.py lifespan). Self+descendants only
+    # (I-LL6): a bad envelope can only break the being's own sandboxed
+    # commands, never sshd/boot/operator. See rawos/kernel/landlock.py.
+
     # Milestone 4 (\The window\) — Telegram front-door
     telegram_enabled:        bool = False
     telegram_bot_token:      str  = ""

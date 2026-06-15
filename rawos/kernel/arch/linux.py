@@ -6,12 +6,14 @@ kernel/sandbox.py — Stage A is a zero-behavior-change extraction.
 """
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import subprocess
 from pathlib import Path
 
 from rawos.config import settings
+from rawos.kernel import landlock
 from rawos.kernel.arch.base import FileOperatorRefusalError, FileSnapshot, ReadonlyWhitelist
 
 
@@ -203,6 +205,19 @@ class LinuxShellPolicy:
             "ulimit -v 524288 -f 102400 -u 256 2>/dev/null; "
             + command
         )
+
+        # Phase 26 -- Landlock self-MAC (I-LL3: dormant by default --
+        # byte-for-byte old behavior when disabled or unsupported).
+        if (
+            settings.landlock_self_mac_enabled
+            and landlock.supported() >= landlock.MIN_ABI
+        ):
+            policy = dataclasses.replace(
+                landlock.DEFAULT_BEING_ENVELOPE,
+                rw_paths=landlock.DEFAULT_BEING_ENVELOPE.rw_paths + (workdir,),
+            )
+            return shell_cmd, {"preexec_fn": landlock.build_restrict_self_fn(policy)}
+
         return shell_cmd, {}
 
     def readonly_whitelist(self) -> ReadonlyWhitelist:
