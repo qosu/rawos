@@ -1,4 +1,4 @@
-CHANGED: scripts/unit_topology_boot_deadman.sh (NEW) | boot deadman health check — floor probe + force-revert drill mode + auto-disarm | I-UT8 implementation
-CHANGED: /etc/systemd/system/rawos-unit-topology-revert.service (LIVE, not in repo) | boot-graph deadman: enabled, armed, ConditionPathExists=armed flag | ready for 23F.3 reboot
-CHANGED: /etc/rawos/unit-topology-deadman.{armed,revert.sh} (LIVE) | rawos-23f3-boottest enabled (boot-graph change), deadman armed | REBOOT PENDING human gate
-NEXT: 23F.3C — human confirm session-2+console+rescue → arm transient deadman → grub-reboot 0 && reboot → post-reboot verify → force-revert drill
+CHANGED: scripts/unit_topology_boot_deadman.sh | v2: 60s retry loop (prevents ssh.service ordering race false positive) | I-UT8 robust
+CHANGED: scripts/systemd/rawos-unit-topology-revert.service | Wants=network-online.target added | prevents race
+DRILL RESULT: 23F.3 COMPLETE — 3 reboots total: false-positive fixed, correct-disarm, force-revert-drill all PASS
+NEXT: 23F.4 human gate — graduate runtime ops (author+delete), GRADUATION_THRESHOLD*2=6 verified successes needed

@@ -1,0 +1,14 @@
+[Unit]
+Description=rawos unit topology boot deadman (Phase 23F.3 I-UT8)
+After=network-online.target ssh.service rawos.service
+Wants=network-online.target
+ConditionPathExists=/etc/rawos/unit-topology-deadman.armed
+
+[Service]
+Type=oneshot
+ExecStart=/root/rawos/scripts/unit_topology_boot_deadman.sh
+RemainAfterExit=yes
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target

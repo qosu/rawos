@@ -1,6 +1,7 @@
 #!/bin/bash
-# rawos Phase 23F.3 boot deadman — I-UT8
+# rawos Phase 23F.3 boot deadman — I-UT8 (v2: network-online.target + retry loop)
 # Runs at boot if /etc/rawos/unit-topology-deadman.armed exists.
+# Retry up to 60s for floor units to become active (prevents false positive from ordering race).
 # Healthy floor → disarm self. Unhealthy floor OR force-revert flag → revert + reboot.
 set -uo pipefail
 
@@ -25,14 +26,35 @@ if [[ -f "$FORCE_REVERT" ]]; then
     exit 0
 fi
 
-# Floor health check — canonical floor set (mirrors FLOOR_UNIT_SEED runtime members)
-UNHEALTHY=0
+# Floor health check with retry loop — up to 60s for floor units to fully start
+# network-online.target ordering still has a race window with ssh.service startup
 declare -a FLOOR_CHECKS=("ssh.service" "rawos.service" "systemd-networkd.service")
+MAX_WAIT_S=60
+INTERVAL_S=5
+MAX_ATTEMPTS=12
+UNHEALTHY=0
+
+for attempt in $(seq 1 $MAX_ATTEMPTS); do
+    UNHEALTHY=0
+    for unit in "${FLOOR_CHECKS[@]}"; do
+        if ! systemctl is-active --quiet "$unit" 2>/dev/null; then
+            UNHEALTHY=1
+            echo "  Attempt $attempt/$MAX_ATTEMPTS: $unit not active yet — waiting ${INTERVAL_S}s..."
+            break
+        fi
+    done
+    if [[ $UNHEALTHY -eq 0 ]]; then
+        break
+    fi
+    sleep $INTERVAL_S
+done
+
+# Final state report
 for unit in "${FLOOR_CHECKS[@]}"; do
     if systemctl is-active --quiet "$unit" 2>/dev/null; then
         echo "  HEALTHY: $unit"
     else
-        echo "  UNHEALTHY: $unit"
+        echo "  UNHEALTHY: $unit (after ${MAX_WAIT_S}s wait)"
         UNHEALTHY=1
     fi
 done
@@ -46,8 +68,8 @@ if [[ $UNHEALTHY -eq 0 ]]; then
     exit 0
 fi
 
-# Floor unhealthy — revert and reboot
-echo "FLOOR UNHEALTHY — executing revert before reboot"
+# Floor unhealthy after full retry window — revert and reboot
+echo "FLOOR UNHEALTHY after ${MAX_WAIT_S}s — executing revert before reboot"
 rm -f "$ARMED"
 if [[ -f "$REVERT" ]]; then
     bash "$REVERT" && echo "Revert script executed OK" || echo "WARNING: revert script exit non-zero"
