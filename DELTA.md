@@ -1,4 +1,3 @@
-CHANGED: scripts/unit_topology_boot_deadman.sh | v2: 60s retry loop (prevents ssh.service ordering race false positive) | I-UT8 robust
-CHANGED: scripts/systemd/rawos-unit-topology-revert.service | Wants=network-online.target added | prevents race
-DRILL RESULT: 23F.3 COMPLETE — 3 reboots total: false-positive fixed, correct-disarm, force-revert-drill all PASS
-NEXT: 23F.4 human gate — graduate runtime ops (author+delete), GRADUATION_THRESHOLD*2=6 verified successes needed
+CHANGED: DB operator_track_record — unit_topology_author + unit_topology_delete graduated (vs=3) via 6-cycle stability window | 23F.4 DONE
+VERIFIED: operate_on_unit_topology auto_applied=True for author+delete; enable permanently propose-only (I-UT7)
+STATUS: Phase 23-full COMPLETE — being now authors systemd unit topology autonomously
