@@ -501,3 +501,178 @@ def execute_approved_service_action(
         user_id, operation_class, service_name, verified=result.verified, now=now_,
     )
     return result
+
+
+# ---------------------------------------------------------------------------
+# Phase 23-full — Unit topology gate
+# ---------------------------------------------------------------------------
+
+
+# Re-export from unit_topology — same class, avoids dual exception hierarchy.
+# Callers may import UnitTopologyRefusalError from rawos.kernel.operator or
+# rawos.kernel.unit_topology — they are identical.
+from rawos.kernel.unit_topology import UnitTopologyRefusalError  # noqa: F401
+
+
+@dataclass(frozen=True)
+class UnitTopologyOutcome:
+    """Result of operate_on_unit_topology: either auto-applied or proposed."""
+
+    auto_applied: bool
+    proposed: bool
+    operation_result: "OperationResult | None"
+    proposed_op: "str | None"
+    reason: str
+
+
+def operate_on_unit_topology(
+    user_id: str,
+    unit_name: str,
+    op: str,
+    floor: "frozenset[str]",
+    *,
+    mgr: object = None,
+    unit_content: "str | None" = None,
+    target_name: "str | None" = None,
+    now: "int | None" = None,
+) -> UnitTopologyOutcome:
+    """Single entry-point for unit topology operations (Phase 23-full).
+
+    Gate order (deliberate — differs from operate_on_service):
+      1. boot-graph op? → propose-only always (I-UT7, permanently human-gated).
+      2. floor closure? → raise UnitTopologyRefusalError unconditionally (I-UT3).
+      3. operator_unit_topology_enabled=False? → propose-only.
+      4. unit_name not in managed_unit_targets? → propose-only.
+      5. not yet graduated? → propose-only.
+      6. auto-apply (runtime ops only).
+
+    Boot-graph ops (enable/disable/set_default) NEVER auto-apply.
+    UnitTopologyRefusalError propagates unconditionally before enabled check.
+    """
+    import time as _time
+    from rawos.kernel import unit_topology as _ut
+    from rawos.config import settings
+    import rawos.db as _db
+
+    now_ = now if now is not None else int(_time.time())
+    operation_class = f"unit_topology_{op}"
+
+    _BOOT_GRAPH_OPS = frozenset({"enable", "disable", "set_default"})
+
+    # 1. Boot-graph op → propose-only always (I-UT7).
+    if op in _BOOT_GRAPH_OPS:
+        return UnitTopologyOutcome(
+            auto_applied=False,
+            proposed=True,
+            operation_result=None,
+            proposed_op=op,
+            reason=(
+                f"boot-graph op '{op}' is permanently propose-only (I-UT7); "
+                "requires human-gated maintenance window"
+            ),
+        )
+
+    # 2. Floor closure → raise unconditionally (I-UT3).
+    # Instantiate action to let its constructor guard floor + op validity.
+    # UnitTopologyRefusalError propagates unhandled.
+    _ = _ut.ReversibleUnitTopologyAction(
+        mgr, unit_name, op, floor,
+        unit_content=unit_content,
+        target_name=target_name,
+    )
+
+    # 3. Enabled check.
+    if not settings.operator_unit_topology_enabled:
+        return UnitTopologyOutcome(
+            auto_applied=False,
+            proposed=True,
+            operation_result=None,
+            proposed_op=op,
+            reason="operator_unit_topology_enabled=False",
+        )
+
+    # 4. Allowlist check.
+    managed = _db.get_managed_unit_target(user_id, unit_name)
+    if managed is None:
+        return UnitTopologyOutcome(
+            auto_applied=False,
+            proposed=True,
+            operation_result=None,
+            proposed_op=op,
+            reason=f"unit {unit_name!r} not in managed_unit_targets allowlist",
+        )
+
+    # 5. Graduation check.
+    track = _db.get_operator_track_record(user_id, operation_class, unit_name)
+    if not track.graduated:
+        return UnitTopologyOutcome(
+            auto_applied=False,
+            proposed=True,
+            operation_result=None,
+            proposed_op=op,
+            reason=f"operation ({operation_class}, {unit_name!r}) not yet graduated",
+        )
+
+    # 6. Auto-apply.
+    if mgr is not None:
+        resolved_mgr = mgr
+    else:
+        from rawos.kernel.arch.linux import LinuxUnitTopologyManager
+        resolved_mgr = LinuxUnitTopologyManager()
+    action = _ut.ReversibleUnitTopologyAction(
+        resolved_mgr, unit_name, op, floor,
+        unit_content=unit_content,
+        target_name=target_name,
+    )
+    result = run_reversible_operation(action)
+    _db.update_operator_track_record(
+        user_id, operation_class, unit_name, verified=result.verified, now=now_,
+    )
+    return UnitTopologyOutcome(
+        auto_applied=True,
+        proposed=False,
+        operation_result=result,
+        proposed_op=None,
+        reason=result.detail,
+    )
+
+
+def execute_approved_unit_action(
+    user_id: str,
+    unit_name: str,
+    op: str,
+    floor: "frozenset[str]",
+    *,
+    mgr: object = None,
+    unit_content: "str | None" = None,
+    target_name: "str | None" = None,
+    now: "int | None" = None,
+) -> "OperationResult":
+    """Execute an owner-approved unit topology action, bypassing graduation.
+
+    For boot-graph ops: still applies UnitTopologyRefusalError floor check and
+    default-target allowlist (I-UT3/I-UT4). No graduation required.
+    Track-record written regardless (contributes toward graduation).
+    """
+    import time as _time
+    from rawos.kernel import unit_topology as _ut
+    import rawos.db as _db
+
+    now_ = now if now is not None else int(_time.time())
+    operation_class = f"unit_topology_{op}"
+
+    if mgr is not None:
+        resolved_mgr = mgr
+    else:
+        from rawos.kernel.arch.linux import LinuxUnitTopologyManager
+        resolved_mgr = LinuxUnitTopologyManager()
+    action = _ut.ReversibleUnitTopologyAction(
+        resolved_mgr, unit_name, op, floor,
+        unit_content=unit_content,
+        target_name=target_name,
+    )
+    result = run_reversible_operation(action)
+    _db.update_operator_track_record(
+        user_id, operation_class, unit_name, verified=result.verified, now=now_,
+    )
+    return result

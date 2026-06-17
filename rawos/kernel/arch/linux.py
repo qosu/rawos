@@ -516,3 +516,138 @@ class LinuxKernelEnforcer:
     def is_bpf_lsm_available(self) -> bool:
         from rawos.kernel import bpf_lsm
         return bpf_lsm.supported()
+
+
+class LinuxUnitTopologyManager:
+    """Linux implementation of UnitTopologyManager via systemctl/systemd-analyze.
+
+    NOT in Backend dataclass — mirrors LinuxKernelEnforcer pattern.
+    Instantiated directly by operate_on_unit_topology() when mgr=None.
+
+    Phase 23-full, I-UT11: ships dormant (operator_unit_topology_enabled=False).
+    """
+
+    _SYSTEMD_UNIT_DIR: str = "/etc/systemd/system"
+
+    # --- Unit file operations ---
+
+    def author_unit(self, unit_name: str, content: str) -> None:
+        """Write content to /etc/systemd/system/<unit_name>."""
+        import os
+        path = os.path.join(self._SYSTEMD_UNIT_DIR, unit_name)
+        with open(path, "w") as fh:
+            fh.write(content)
+
+    def delete_unit(self, unit_name: str) -> None:
+        """Remove /etc/systemd/system/<unit_name> (no-op if absent)."""
+        import os
+        path = os.path.join(self._SYSTEMD_UNIT_DIR, unit_name)
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
+
+    def read_unit(self, unit_name: str) -> "str | None":
+        """Return unit file content, or None if not present."""
+        import os
+        path = os.path.join(self._SYSTEMD_UNIT_DIR, unit_name)
+        try:
+            return open(path).read()
+        except FileNotFoundError:
+            return None
+
+    # --- Enable / disable ---
+
+    def enable(self, unit_name: str) -> None:
+        import subprocess
+        subprocess.run(
+            ["systemctl", "enable", unit_name],
+            check=True, capture_output=True,
+        )
+
+    def disable(self, unit_name: str) -> None:
+        import subprocess
+        subprocess.run(
+            ["systemctl", "disable", unit_name],
+            check=True, capture_output=True,
+        )
+
+    def is_enabled(self, unit_name: str) -> bool:
+        import subprocess
+        result = subprocess.run(
+            ["systemctl", "is-enabled", unit_name],
+            capture_output=True, text=True,
+        )
+        return result.stdout.strip() == "enabled"
+
+    # --- Default target ---
+
+    def set_default(self, target: str) -> None:
+        import subprocess
+        subprocess.run(
+            ["systemctl", "set-default", target],
+            check=True, capture_output=True,
+        )
+
+    def get_default(self) -> str:
+        import subprocess
+        result = subprocess.run(
+            ["systemctl", "get-default"],
+            capture_output=True, text=True, check=True,
+        )
+        return result.stdout.strip()
+
+    # --- Reload ---
+
+    def daemon_reload(self) -> None:
+        import subprocess
+        subprocess.run(
+            ["systemctl", "daemon-reload"],
+            check=True, capture_output=True,
+        )
+
+    # --- Verify / health ---
+
+    def analyze_verify(self) -> "tuple[bool, str]":
+        """Run systemd-analyze verify on all unit files in _SYSTEMD_UNIT_DIR.
+
+        Returns (ok, output) — ok=True iff exit code 0.
+        Runs on FULL config (not just new unit) as required by I-UT5.
+        """
+        import subprocess
+        import glob
+        import os
+        unit_files = glob.glob(os.path.join(self._SYSTEMD_UNIT_DIR, "*"))
+        if not unit_files:
+            return (True, "")
+        result = subprocess.run(
+            ["systemd-analyze", "verify", *sorted(unit_files)],
+            capture_output=True, text=True,
+        )
+        output = result.stdout + result.stderr
+        return (result.returncode == 0, output)
+
+    def is_active(self, unit_name: str) -> bool:
+        import subprocess
+        result = subprocess.run(
+            ["systemctl", "is-active", unit_name],
+            capture_output=True, text=True,
+        )
+        return result.stdout.strip() == "active"
+
+    def is_system_running(self) -> bool:
+        import subprocess
+        result = subprocess.run(
+            ["systemctl", "is-system-running"],
+            capture_output=True, text=True,
+        )
+        state = result.stdout.strip()
+        return state not in {"failed", "stopping"}
+
+    def list_dependencies(self, *unit_names: str) -> str:
+        import subprocess
+        result = subprocess.run(
+            ["systemctl", "list-dependencies", "--all", *unit_names],
+            capture_output=True, text=True,
+        )
+        return result.stdout

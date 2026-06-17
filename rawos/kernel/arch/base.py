@@ -220,6 +220,70 @@ class FileOperator(Protocol):
         ...
 
 
+
+class UnitTopologyManager(Protocol):
+    """Protocol for systemd unit/boot topology management (Phase 23-full).
+
+    Implementations wrap systemctl/systemd-analyze as the stable ABI.
+    NOT in Backend dataclass — mirrors LinuxKernelEnforcer pattern (dormant stub).
+    """
+
+    def author_unit(self, unit_name: str, content: str) -> None:
+        """Write unit_name with given content to /etc/systemd/system/."""
+        ...
+
+    def delete_unit(self, unit_name: str) -> None:
+        """Remove unit_name from /etc/systemd/system/ (no-op if absent)."""
+        ...
+
+    def read_unit(self, unit_name: str) -> "str | None":
+        """Return unit file content, or None if the file does not exist."""
+        ...
+
+    def enable(self, unit_name: str) -> None:
+        """systemctl enable unit_name."""
+        ...
+
+    def disable(self, unit_name: str) -> None:
+        """systemctl disable unit_name."""
+        ...
+
+    def is_enabled(self, unit_name: str) -> bool:
+        """Return True iff systemctl is-enabled reports 'enabled'."""
+        ...
+
+    def set_default(self, target: str) -> None:
+        """systemctl set-default target."""
+        ...
+
+    def get_default(self) -> str:
+        """systemctl get-default."""
+        ...
+
+    def daemon_reload(self) -> None:
+        """systemctl daemon-reload."""
+        ...
+
+    def analyze_verify(self) -> "tuple[bool, str]":
+        """Run systemd-analyze verify across all units in /etc/systemd/system/.
+
+        Returns (ok, output_text). ok=True iff exit code 0.
+        """
+        ...
+
+    def is_active(self, unit_name: str) -> bool:
+        """Return True iff systemctl is-active reports active."""
+        ...
+
+    def is_system_running(self) -> bool:
+        """Return True iff systemctl is-system-running is not failed/stopping."""
+        ...
+
+    def list_dependencies(self, *unit_names: str) -> str:
+        """Return stdout of systemctl list-dependencies --all <unit_names>."""
+        ...
+
+
 class KernelObserver(Protocol):
     """OS-specific mechanism for the being's kernel-level perception (Phase 24a).
 

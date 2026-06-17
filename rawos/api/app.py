@@ -65,6 +65,14 @@ async def lifespan(app: FastAPI):
         mode=settings.bpf_lsm_mode,
     )
 
+    # Phase 23-full — fail-fast: refuse boot if unit topology enabled but
+    # systemd not available as PID1, or default.target outside allowed set (I-UT9/I-UT11).
+    # enabled=False (I-UT11 dormant default) → no-op, never raises.
+    from rawos.kernel import unit_topology as _unit_topology_mod
+    _unit_topology_mod.validate_boot_config(
+        enabled=settings.operator_unit_topology_enabled,
+    )
+
     # Pre-warm ChromaDB + sentence-transformers
     from rawos.kernel.memory_index import warmup
     loop = asyncio.get_event_loop()

@@ -200,4 +200,11 @@ class Settings(BaseSettings):
     max_orchestrator_tokens: int = 10_000
     max_parallel_agents:     int = 5
 
+    # Phase 23-full — Unit/Boot Topology Authorship (active authority, dormant)
+    # Ships DORMANT (I-UT11): all unit_topology_* flags are no-ops until the
+    # supervised 23F.0→23F.4 maintenance-window gates (human-gated, NOT autonomous).
+    operator_unit_topology_enabled: bool = False
+    unit_topology_propose_only: bool = True
+    unit_topology_revert_deadman_delay_s: int = 300
+
 settings = Settings()

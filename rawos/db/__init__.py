@@ -1131,3 +1131,55 @@ def list_venv_op_history(limit: int = 20) -> list[dict]:
             (limit,),
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+# ---------------------------------------------------------------------------
+# managed_unit_targets — Phase 23-full (unit topology allowlist)
+# ---------------------------------------------------------------------------
+
+
+def get_managed_unit_target(user_id: str, unit_name: str) -> dict | None:
+    """Return the allowlist row for (user, unit_name), or None if not allowlisted."""
+    with _conn() as conn:
+        row = conn.execute(
+            """SELECT unit_name, created_at
+               FROM managed_unit_targets
+               WHERE user_id = ? AND unit_name = ?""",
+            (user_id, unit_name),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def list_managed_unit_targets(user_id: str) -> list[dict]:
+    """Return all allowlisted unit_name rows for user_id."""
+    with _conn() as conn:
+        rows = conn.execute(
+            """SELECT unit_name, created_at
+               FROM managed_unit_targets
+               WHERE user_id = ?""",
+            (user_id,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def add_managed_unit_target(user_id: str, unit_name: str) -> None:
+    """Register unit_name as an owner-allowlisted unit topology target.
+
+    Upserts: re-registering an existing unit is a no-op (no validator_cmd to update).
+    """
+    with _conn() as conn:
+        conn.execute(
+            """INSERT INTO managed_unit_targets (user_id, unit_name)
+               VALUES (?, ?)
+               ON CONFLICT(user_id, unit_name) DO NOTHING""",
+            (user_id, unit_name),
+        )
+
+
+def remove_managed_unit_target(user_id: str, unit_name: str) -> None:
+    """Remove unit_name from the owner unit topology allowlist (no-op if not present)."""
+    with _conn() as conn:
+        conn.execute(
+            "DELETE FROM managed_unit_targets WHERE user_id = ? AND unit_name = ?",
+            (user_id, unit_name),
+        )
