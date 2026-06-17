@@ -254,11 +254,11 @@ def _render_event(event: dict, console: Any) -> None:
     elif ev_type == "agent_output":
         text = event.get("content") or ""
         if text:
-            console.print(text, end="")
+            console.print(text, end="", markup=False, highlight=False)
     elif ev_type == "chunk":
         text = event.get("text") or ""
         if text:
-            console.print(text, end="")
+            console.print(text, end="", markup=False, highlight=False)
     elif ev_type == "tool_call":
         tool = event.get("tool", "")
         console.print(f"[dim]→ {tool}[/dim]")
