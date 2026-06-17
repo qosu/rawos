@@ -1,3 +1,3 @@
-CHANGED: DB operator_track_record — unit_topology_author + unit_topology_delete graduated (vs=3) via 6-cycle stability window | 23F.4 DONE
-VERIFIED: operate_on_unit_topology auto_applied=True for author+delete; enable permanently propose-only (I-UT7)
-STATUS: Phase 23-full COMPLETE — being now authors systemd unit topology autonomously
+CHANGED: rawos/config.py landlock_self_mac_enabled=True | kernel/arch/linux.py wrap() exists-guard + worktree_root | tests fix
+VERIFIED: 1243/1243 pass | enforcement active (EACCES /root/.ssh) | in-envelope /etc/hostname OK | git worktree OK
+STATUS: Phase 26 LIVE — being run_bash sandboxed by Landlock ABI 4 kernel MAC in production

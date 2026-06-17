@@ -159,7 +159,7 @@ class Settings(BaseSettings):
     ebpf_perception_respawn_backoff_s: float = 5.0
 
     # Phase 26 — Landlock self-MAC (active enforcement, dormant)
-    landlock_self_mac_enabled: bool = False
+    landlock_self_mac_enabled: bool = True
     # Dormant (I-LL3): run_bash's preexec_fn applies DEFAULT_BEING_ENVELOPE
     # only when True AND landlock.supported() >= landlock.MIN_ABI (validated
     # at boot -- I-LL4, see api/app.py lifespan). Self+descendants only

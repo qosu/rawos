@@ -212,9 +212,16 @@ class LinuxShellPolicy:
             settings.landlock_self_mac_enabled
             and landlock.supported() >= landlock.MIN_ABI
         ):
+            # Only add paths that actually exist — os.open(O_PATH) in
+            # build_restrict_self_fn fails on nonexistent paths.  A command
+            # with a nonexistent workdir will fail at the "cd" step anyway.
+            import os as _os
+            rw_extra = (workdir,) if _os.path.exists(workdir) else ()
+            _wt_root = settings.worktree_root
+            wt_extra = (_wt_root,) if _os.path.exists(_wt_root) else ()
             policy = dataclasses.replace(
                 landlock.DEFAULT_BEING_ENVELOPE,
-                rw_paths=landlock.DEFAULT_BEING_ENVELOPE.rw_paths + (workdir,),
+                rw_paths=landlock.DEFAULT_BEING_ENVELOPE.rw_paths + rw_extra + wt_extra,
             )
             return shell_cmd, {"preexec_fn": landlock.build_restrict_self_fn(policy)}
 

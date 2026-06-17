@@ -20,7 +20,10 @@ from __future__ import annotations
 from rawos.kernel.arch.linux import LinuxShellPolicy
 
 
-def test_wrap_reproduces_cd_and_ulimit_prefix():
+def test_wrap_reproduces_cd_and_ulimit_prefix(monkeypatch):
+    # Characterise wrap() with Landlock disabled (flag-off is the invariant
+    # this test was written for; flag-on behavior is covered by test_landlock.py).
+    monkeypatch.setattr("rawos.config.settings.landlock_self_mac_enabled", False)
     policy = LinuxShellPolicy()
     workdir = "/root/myrepo"
     shell_cmd, exec_kwargs = policy.wrap("echo hello", workdir)
