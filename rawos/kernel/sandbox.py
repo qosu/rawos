@@ -153,6 +153,22 @@ async def run_bash_in_container(command: str, workdir: str) -> BashResult:
         "--pids-limit", _CONTAINER_PIDS,
         "--ulimit", "nofile=1024:1024",
         "--security-opt", "no-new-privileges",
+        # SHP.3 hardening ─────────────────────────────────────────────────────
+        # I-SEC2: drop ALL Linux capabilities. Container root has no kernel
+        # privileges — cannot mount, load modules, manipulate other processes,
+        # change UID/GID of arbitrary files, etc. Dramatically reduces escape
+        # surface even against known kernel exploits.
+        "--cap-drop", "ALL",
+        # I-SEC2: read-only container rootfs. Users cannot modify the image
+        # (/usr, /bin, /lib, etc.). Workspace bind-mount (/workspace) and
+        # /tmp (tmpfs below) remain writable as required.
+        "--read-only",
+        # Writable /tmp with noexec+nosuid. Required alongside --read-only so
+        # tools that write temp files (pip, build tools) continue to function.
+        # noexec: cannot execute binaries placed in /tmp.
+        # nosuid: setuid bits on /tmp files are ignored.
+        "--tmpfs", "/tmp:rw,noexec,nosuid,size=64m",
+        # ──────────────────────────────────────────────────────────────────────
         "-v", f"{abs_workdir}:/workspace",
         "-w", "/workspace",
         DOCKER_IMAGE,

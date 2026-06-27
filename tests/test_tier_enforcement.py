@@ -214,6 +214,18 @@ class TestGitCheckoutRestore:
 # ---------------------------------------------------------------------------
 
 class TestExecuteWrapper:
+    @pytest.fixture(autouse=True)
+    def _force_host_direct_bash(self, monkeypatch):
+        """Force host-direct bash for TestExecuteWrapper (SHP.3 compat).
+
+        Tests run git commands (git add, git commit) requiring git on PATH.
+        python:3.12-slim has no git. Run host-direct so tier-enforcement logic
+        can execute git operations as designed.
+        Container isolation tested independently in test_sandbox_isolation.py.
+        """
+        import rawos.kernel.tools as _tools
+        monkeypatch.setattr(_tools.settings, "sandbox_docker", False)
+
     def _setup_repo(self, tmp_path):
         _init_repo(str(tmp_path))
         (tmp_path / "rawos" / "api").mkdir(parents=True)
@@ -392,6 +404,19 @@ class TestEscapeVectors:
     execute() is called with workdir=worktree — the live-repo check in
     _execute_with_tier_enforcement must catch and revert the violation.
     """
+
+    @pytest.fixture(autouse=True)
+    def _force_host_direct_bash(self, monkeypatch):
+        """Force host-direct bash for TestEscapeVectors (SHP.3 compat).
+
+        These tests verify tier-enforcement LOGIC at the tool layer using host
+        filesystem paths (symlinks from worktree → /tmp/pytest-* repo dirs) that
+        are invisible inside a Docker container.  Running host-direct lets the
+        tier check see the symlink targets.  Container isolation is independently
+        tested in test_sandbox_isolation.py.
+        """
+        import rawos.kernel.tools as _tools
+        monkeypatch.setattr(_tools.settings, "sandbox_docker", False)
 
     def _setup_linked_worktree(self, tmp_path):
         """Return (repo, worktree) — repo with TIER 0/1 structure, linked worktree."""

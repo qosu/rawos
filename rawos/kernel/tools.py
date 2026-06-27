@@ -18,6 +18,8 @@ import httpx
 from rawos.config import settings
 from rawos.kernel.arch import get_arch
 from rawos.kernel.sandbox import BashResult, PathTraversalError, run_bash, run_bash_in_container, validate_path
+from rawos.kernel import capability_gate as _capability_gate
+from rawos.kernel import output_guard as _output_guard
 
 log = logging.getLogger("rawos.tools")
 
@@ -310,6 +312,77 @@ async def _list_files(params: dict[str, Any], workdir: str) -> ToolResult:
         return ToolResult(output=f"error listing files: {e}", success=False, duration_ms=0)
 
 
+
+# SHP.3 I-SEC8 — SSRF deny list: RFC1918 + loopback + link-local + IPv6 equivalents.
+# _ssrf_blocked_url() must be called before every outbound HTTP request.
+_SSRF_BLOCKED_NETWORKS: "list[ipaddress.IPv4Network | ipaddress.IPv6Network]" = []
+
+def _build_ssrf_blocklist() -> None:
+    """Populate _SSRF_BLOCKED_NETWORKS once at import time."""
+    import ipaddress as _ip
+    for cidr in (
+        "10.0.0.0/8",       # RFC1918 private
+        "172.16.0.0/12",    # RFC1918 private
+        "192.168.0.0/16",   # RFC1918 private
+        "127.0.0.0/8",      # loopback
+        "169.254.0.0/16",   # link-local (cloud metadata: 169.254.169.254)
+        "100.64.0.0/10",    # shared address space (RFC6598, carrier-grade NAT)
+        "0.0.0.0/8",        # "this" network
+        "::1/128",           # IPv6 loopback
+        "fc00::/7",          # IPv6 unique local
+        "fe80::/10",         # IPv6 link-local
+        "64:ff9b::/96",     # IPv4-mapped IPv6
+    ):
+        _SSRF_BLOCKED_NETWORKS.append(_ip.ip_network(cidr, strict=False))
+
+_build_ssrf_blocklist()
+
+
+def _ssrf_blocked_url(url: str) -> str | None:
+    """Return a human-readable reason if url should be blocked for SSRF; None if allowed.
+
+    Resolves hostname → checks all resolved IPs. Fail-closed: resolution error = blocked.
+    Also rejects non-http(s) schemes (redundant with caller check, defence-in-depth).
+    """
+    import ipaddress as _ip
+    import socket as _socket
+    from urllib.parse import urlparse as _urlparse
+
+    parsed = _urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        return f"SSRF-blocked: scheme {parsed.scheme!r} not allowed (only http/https)"
+
+    hostname = parsed.hostname
+    if not hostname:
+        return "SSRF-blocked: empty hostname"
+
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+
+    # Resolve hostname → list of (family, type, proto, canonname, sockaddr)
+    try:
+        infos = _socket.getaddrinfo(hostname, port, proto=_socket.IPPROTO_TCP)
+    except _socket.gaierror as e:
+        return f"SSRF-blocked: hostname resolution failed: {e}"
+
+    if not infos:
+        return "SSRF-blocked: hostname resolved to no addresses"
+
+    for _fam, _type, _proto, _canon, sockaddr in infos:
+        ip_str = sockaddr[0]
+        try:
+            addr = _ip.ip_address(ip_str)
+        except ValueError:
+            return f"SSRF-blocked: could not parse resolved IP: {ip_str!r}"
+        for net in _SSRF_BLOCKED_NETWORKS:
+            if addr in net:
+                return (
+                    f"SSRF-blocked: {hostname!r} resolves to {ip_str} "
+                    f"which is in denied range {net}"
+                )
+
+    return None  # allowed
+
+
 async def _fetch_url(params: dict[str, Any], workdir: str) -> ToolResult:
     import time
     start = time.monotonic()
@@ -321,6 +394,11 @@ async def _fetch_url(params: dict[str, Any], workdir: str) -> ToolResult:
         return ToolResult(output="error: url is required", success=False, duration_ms=0)
     if not url.startswith(("http://", "https://")):
         return ToolResult(output="error: url must start with http:// or https://", success=False, duration_ms=0)
+
+    # I-SEC8: SSRF guard — deny RFC1918/loopback/link-local (fail-closed)
+    ssrf_reason = _ssrf_blocked_url(url)
+    if ssrf_reason:
+        return ToolResult(output=f"error: {ssrf_reason}", success=False, duration_ms=0)
 
     try:
         async with httpx.AsyncClient(
@@ -1687,7 +1765,15 @@ async def _tier_violations(workdir: str, before: dict[str, str], after: dict[str
 
 async def _run_impl(impl: ToolFn, tool_name: str, params: dict[str, Any], workdir: str) -> ToolResult:
     try:
-        return await impl(params, workdir)
+        result = await impl(params, workdir)
+        # SHP.4 I-SEC7: scan output for secrets before returning to agent loop
+        from rawos.kernel.billing_context import get_billing_context as _get_bc
+        _ctx = _get_bc()
+        _uid = _ctx["user_id"] if _ctx else "<unknown>"
+        guarded = _output_guard.guard_output(result.output, tool_name, _uid)
+        if guarded is not result.output:
+            result = ToolResult(output=guarded, success=result.success, duration_ms=result.duration_ms)
+        return result
     except Exception as e:
         log.exception("tool %s raised unexpectedly", tool_name)
         return ToolResult(output=f"tool error: {e}", success=False, duration_ms=0)
@@ -1796,6 +1882,14 @@ async def execute(tool_name: str, params: dict[str, Any], workdir: str) -> ToolR
     this also enforces the Phase 16 TIER boundary — see PLAN.md "THE HARD
     BOUNDARY" and "Pass 2 — implementation design".
     """
+    # SHP.4 I-SEC6: capability gate — classify tier + audit (audit-first SHP.4)
+    from rawos.kernel.billing_context import get_billing_context as _get_bc
+    _ectx = _get_bc()
+    _euid = _ectx["user_id"] if _ectx else "<unknown>"
+    _gate = _capability_gate.pre_execute_gate(tool_name, params, workdir, _euid)
+    if not _gate.allowed:
+        return ToolResult(output=f"error: {_gate.reason}", success=False, duration_ms=0)
+
     impl = REGISTRY.get(tool_name)
     if impl is None:
         return ToolResult(output=f"unknown tool: {tool_name}", success=False, duration_ms=0)
