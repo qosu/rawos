@@ -214,6 +214,18 @@ async def _start_bpf_lsm_heartbeat_loop() -> None:
     from rawos.kernel import bpf_lsm as _bpf_lsm_mod
     if settings.bpf_lsm_enabled:
         client: _bpf_lsm_mod.BpfLsmHolderClient = _bpf_lsm_mod._SocketHolderClient()
+        # SHP.6: apply configured mode at startup (I-LSM4 — was never wired before)
+        try:
+            await client.flip_mode(settings.bpf_lsm_mode)
+            _log.info(
+                "SHP.6: BPF LSM mode initialized to %r at startup", settings.bpf_lsm_mode
+            )
+        except Exception:
+            _log.warning(
+                "SHP.6: BPF LSM startup mode flip to %r failed "
+                "(holder socket may not be ready — will retry on next heartbeat cycle)",
+                settings.bpf_lsm_mode,
+            )
     else:
         client = _bpf_lsm_mod._NullHolderClient()
     supervisor = _bpf_lsm_mod.BpfLsmSupervisor(

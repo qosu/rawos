@@ -1,8 +1,58 @@
 """rawos runtime configuration — all values from environment, never hardcoded."""
 from __future__ import annotations
 from pathlib import Path
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
+
+
+# ---------------------------------------------------------------------------
+# SHP.2 I-SEC3: systemd LoadCredential source — highest priority for secrets
+# ---------------------------------------------------------------------------
+_CRED_RUNTIME_DIR: str = "/run/credentials/rawos.service"
+_CREDENTIAL_FIELDS: frozenset[str] = frozenset({
+    "jwt_secret",
+    "stripe_key",
+    "stripe_webhook_secret",
+    "hf_token",
+    "llm_api_key",
+    "telegram_bot_token",
+})
+
+
+class _SystemdCredentialsSource(PydanticBaseSettingsSource):
+    """Read sensitive secrets from systemd LoadCredential runtime directory.
+
+    Systemd makes credentials available at /run/credentials/<unit>/<id>
+    when LoadCredential= is set in the service unit (mode 0400, root only).
+    If a credential file does not exist (tests, non-systemd runs), the field
+    is silently skipped and Pydantic falls back to the next source (env/dotenv).
+    """
+
+    def get_field_value(self, field, field_name):
+        import os
+        cred_dir = os.environ.get("CREDENTIALS_DIRECTORY", "")
+        if not cred_dir or field_name not in _CREDENTIAL_FIELDS:
+            return None, field_name, False
+        path = f"{cred_dir}/{field_name}"
+        try:
+            value = open(path).read().strip()
+            return value, field_name, False
+        except OSError:
+            return None, field_name, False
+
+    def __call__(self) -> dict:
+        import os
+        cred_dir = os.environ.get("CREDENTIALS_DIRECTORY", "")
+        if not cred_dir:
+            return {}  # not running under systemd with LoadCredential= in effect
+        data: dict = {}
+        for name in _CREDENTIAL_FIELDS:
+            path = f"{cred_dir}/{name}"
+            try:
+                data[name] = open(path).read().strip()
+            except OSError:
+                pass
+        return data
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -10,6 +60,24 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
     )
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type["Settings"],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        **kwargs,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        """Credential files take priority over env/dotenv for sensitive secrets."""
+        return (
+            init_settings,
+            _SystemdCredentialsSource(settings_cls),
+            env_settings,
+            dotenv_settings,
+        )
+
+
 
     # Server
     host: str   = "0.0.0.0"
@@ -175,7 +243,7 @@ class Settings(BaseSettings):
     # (sshd/systemd/holder/rawos/git) compiled into immutable engine bytecode,
     # checked BEFORE policy maps — policy-map writes CANNOT deny floor (I-LSM5).
     bpf_lsm_enabled: bool = True           # 24B.2 ACTIVATED + 24B.4 GRADUATED 2026-06-15 (lsm= in GRUB_CMDLINE_LINUX, holder auto-start)
-    bpf_lsm_mode: str = "audit"              # audit (log-only) or enforce
+    bpf_lsm_mode: str = "enforce"              # audit (log-only) or enforce
     bpf_lsm_object_path: str = "/opt/rawos-bpf/engine.bpf.o"            # path to prebuilt CO-RE .o (empty = dormant)
     bpf_lsm_object_sha256: str = "08f2e291122677177ebabb2653831e0b4a450979ae37ae9b35ae054358273c52"          # sha256 of .o; mismatch → fail-closed (I-LSM11)
     bpf_lsm_holder_binary_path: str = "/opt/rawos-bpf/rawos-bpf-lsm-holder"     # path to holder binary

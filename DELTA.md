@@ -1,4 +1,4 @@
-CHANGED: rawos/kernel/arch/linux.py rawos_extra (rawos_source_root) added to Landlock rw_paths | WHY: git-worktree subprocess needs RW /root/rawos/.git/ for checkout -b | NEXT: none
-CHANGED: tests/test_landlock.py out-of-envelope sentinel → /root/.ssh/ (rawos source now in envelope)
-VERIFIED: 1243/1243 pass | self-probe cycle COMPLETE ("branch=rawos/self-improve-... available for human review") | commit b6f2636b
-STATUS: Phase 26 LIVE — all Phase 26 fixes complete. rawos PID 33691 healthy.
+CHANGED: rawos/config.py | SHP.2 I-SEC3: _SystemdCredentialsSource reads /run/credentials/rawos.service/ (via CREDENTIALS_DIRECTORY env — only set by systemd in service process, not test contexts) | SHP.2 COMPLETE
+CHANGED: rawos/api/app.py | SHP.6: flip_mode(settings.bpf_lsm_mode) wired at startup; SHP.7: dep drift check + audit chain startup record extended | SHP.6 LIVE enforce mode
+STATUS: SHP.2 (secrets migration) DONE; SHP.6 (BPF LSM enforce) LIVE on prod; SHP.7 COMMITTED f19ca138; 1331 tests green
+NEXT: SHP.3/SHP.4 commit (sandbox.py cap-drop/read-only, capability_gate, output_guard — already implemented, not yet committed)
