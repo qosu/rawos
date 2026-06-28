@@ -27,6 +27,7 @@ import dataclasses
 import hashlib
 import json
 import logging
+import socket
 import threading
 import time
 from pathlib import Path
@@ -397,7 +398,7 @@ async def _push_telegram() -> None:
         f"seq: {chain.last_seq}\n"
         f"hash: {chain.last_hash[:32]}...\n"
         f"ts: {ts_utc}\n"
-        "server: rawos-167.233.44.121"
+        f"server: {socket.gethostname()}"
     )
 
     url = (
