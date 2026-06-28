@@ -1,0 +1,43 @@
+# rawos — API tier compose file
+#
+# Runs the rawos API service with Redis for session/cache backend.
+# Substrate features are NOT available in this configuration — see Dockerfile
+# header and README.md for what requires bare-metal/VM deployment.
+#
+# Usage:
+#   cp .env.example .env   # fill in LLM_API_KEY and other required credentials
+#   docker compose up
+
+services:
+  rawos:
+    build: .
+    ports:
+      - "8002:8002"
+    environment:
+      - PORT=8002
+      - RAWOS_ENV=production
+      - REDIS_URL=redis://redis:6379/0
+    env_file:
+      - .env
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    # Read-only root filesystem where possible; scratch at /tmp
+    read_only: true
+    tmpfs:
+      - /tmp:noexec,nosuid,size=128m
+    security_opt:
+      - no-new-privileges:true
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --save "" --appendonly no
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+    # No persistence — cache/session only
+    volumes: []
