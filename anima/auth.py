@@ -8,7 +8,6 @@ import hashlib
 import secrets
 import time
 import uuid
-from datetime import datetime, timezone
 
 import bcrypt
 from jose import JWTError, jwt

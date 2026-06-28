@@ -341,7 +341,6 @@ async def _venv_boot_commit_task() -> None:
     """
     import json as _json
     from pathlib import Path as _Path
-    import time as _time
 
     import httpx
 

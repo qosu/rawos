@@ -3,6 +3,10 @@ anima database store — thin async wrapper over SQLite.
 All public methods enforce user_id scoping by construction.
 """
 from __future__ import annotations
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from anima.kernel.track_record import TrackRecordState
 
 import json
 import sqlite3
@@ -12,8 +16,8 @@ from pathlib import Path
 from typing import Any
 
 from anima.models import (
-    User, UserPublic, Project, Agent, AgentStatus,
-    Intent, IntentStatus, Memory, Artifact, Tool, Event,
+    User, UserPublic, Project, Agent, AgentStatus,  # noqa: F401
+    Intent, IntentStatus, Memory, Artifact, Tool, Event,  # noqa: F401
 )
 
 _DB_PATH: Path | None = None
@@ -539,7 +543,7 @@ def delete_memories_batch(user_id: str, memory_ids: list[str]) -> int:
 # ---------------------------------------------------------------------------
 
 def get_project_agents(user_id: str, project_id: str, limit: int = 50) -> list:
-    from anima.models import Agent as AgentModel
+    from anima.models import Agent as AgentModel  # noqa: F401
     with _conn() as conn:
         rows = conn.execute(
             """SELECT * FROM agents
@@ -752,7 +756,7 @@ def get_proactive_artifacts_since(
 
 def get_operator_track_record(
     user_id: str, operation_class: str, target: str
-) -> "TrackRecordState":
+) -> TrackRecordState:
     """Return the operator track-record state for (user, operation_class, target).
 
     Returns a fresh untrusted TrackRecordState (verified_successes=0, graduated=False)
@@ -786,7 +790,7 @@ def update_operator_track_record(
     *,
     verified: bool,
     now: int,
-) -> "TrackRecordState":
+) -> TrackRecordState:
     """Advance and persist the operator track record for one operation outcome.
 
     `verified=True`  → apply succeeded and validator passed (no anomaly).
@@ -802,7 +806,7 @@ def update_operator_track_record(
     """
     import logging as _logging
     _log = _logging.getLogger("anima.db.operator_track_record")
-    from anima.kernel.track_record import _advance_state, GRADUATION_THRESHOLD
+    from anima.kernel.track_record import _advance_state
 
     current = get_operator_track_record(user_id, operation_class, target)
     new = _advance_state(
@@ -1087,7 +1091,7 @@ def get_active_workspace_dirs() -> list[str]:
                  AND p.workdir IS NOT NULL
                  AND p.workdir != ''""",
         ).fetchall()
-    return [row[workdir] for row in rows]
+    return [row["workdir"] for row in rows]
 
 
 # ---------------------------------------------------------------------------

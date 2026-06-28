@@ -23,7 +23,6 @@ from anima.context.calendar import (
     remove_calendar_credentials,
     save_calendar_credentials,
     sync_calendar_for_user,
-    _LOOKAHEAD_S,
 )
 
 router = APIRouter()

@@ -511,7 +511,7 @@ def execute_approved_service_action(
 # Re-export from unit_topology — same class, avoids dual exception hierarchy.
 # Callers may import UnitTopologyRefusalError from anima.kernel.operator or
 # anima.kernel.unit_topology — they are identical.
-from anima.kernel.unit_topology import UnitTopologyRefusalError  # noqa: F401
+from anima.kernel.unit_topology import UnitTopologyRefusalError  # noqa: F401, E402
 
 
 @dataclass(frozen=True)

@@ -12,13 +12,12 @@ from __future__ import annotations
 import logging
 import time
 from pathlib import Path
-from typing import Any
 
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
 
 from anima.config import settings
-from anima.context.collector import _IGNORE_FILE_PREFIXES, _IGNORE_PREFIXES, _record_event
+from anima.context.collector import _IGNORE_PREFIXES, _record_event
 from anima.kernel.entity import RAWOS_ENTITY_USER_ID
 
 _log = logging.getLogger(__name__)

@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import json
 import logging
-from pathlib import Path
 
 import anima.db as db
 from anima.config import settings

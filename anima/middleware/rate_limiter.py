@@ -13,7 +13,6 @@ Returns 429 Too Many Requests with Retry-After header when limit exceeded.
 from __future__ import annotations
 
 import logging
-import time
 from typing import Awaitable, Callable
 
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -148,7 +147,7 @@ class RateLimiterMiddleware(BaseHTTPMiddleware):
         if auth.startswith("Bearer "):
             token = auth[7:]
             try:
-                from jose import jwt, JWTError
+                from jose import jwt
                 payload = jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
                 return payload.get("sub", self._client_ip(request))
             except Exception:

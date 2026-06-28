@@ -16,7 +16,7 @@ import logging
 import sqlite3
 from pathlib import Path
 
-from anima.dataset.schema import BehavioralContext, DatasetExample, VALID_DOMAINS
+from anima.dataset.schema import BehavioralContext, DatasetExample
 
 log = logging.getLogger("anima.dataset.extractor")
 

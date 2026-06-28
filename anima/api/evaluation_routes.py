@@ -39,7 +39,7 @@ async def rate_artifact(body: RateRequest, user=Depends(current_user)):
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
+    except Exception:
         log.exception("rate_artifact failed for user=%s", user.id)
         raise HTTPException(status_code=500, detail="rating submission failed")
     return result

@@ -70,8 +70,7 @@ def set_config(key: str, value: str) -> None:
 
 def get_study_day() -> int:
     """Return current study day (1-based). Returns 0 before study start."""
-    import time
-    from datetime import date, datetime
+    from datetime import date
     start_str = get_config("study_start_date", "")
     if not start_str:
         return 0

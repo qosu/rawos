@@ -11,7 +11,6 @@ import asyncio
 import json
 import logging
 import time
-from pathlib import Path
 
 import anima.db as db
 from anima.dataset.schema import DatasetExample, VALID_DOMAINS

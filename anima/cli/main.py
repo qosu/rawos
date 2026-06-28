@@ -473,7 +473,7 @@ def rate(file_path: str, rating: int, comment: str | None) -> None:
     """Rate a proactive artifact for research evaluation (1=useless, 5=excellent)."""
     from rich.console import Console
     console = Console()
-    result = _api('post', '/evaluation/rate', json={
+    _api('post', '/evaluation/rate', json={
         'file_path': file_path,
         'rating': rating,
         'comment': comment,
@@ -684,7 +684,6 @@ def classifier_benchmark(llm_sample: int) -> None:
     """Benchmark rule vs classifier vs LLM on the labeled dataset."""
     import asyncio
     from rich.console import Console
-    from rich.panel import Panel
     from rich.table import Table
     from rich import box
     console = Console()
@@ -738,7 +737,7 @@ def classifier_benchmark(llm_sample: int) -> None:
             str(s.get("n_examples", s.get("sample_size", "?"))),
         )
     console.print(t)
-    console.print(f"[dim]Results saved to /root/rawos/data/benchmark_results.json[/dim]")
+    console.print("[dim]Results saved to /root/rawos/data/benchmark_results.json[/dim]")
 
 
 @cli.group()
@@ -860,7 +859,6 @@ def study_status_cmd() -> None:
     bar_filled = int(day / total_days * 30)
     progress_bar = "[green]" + "█" * bar_filled + "[/green]" + "·" * (30 - bar_filled)
 
-    data_color = "green" if resp.get("data_flowing") else "red"
     data_status = "[green]FLOWING[/green]" if resp.get("data_flowing") else "[red]NO DATA — run setup[/red]"
 
     console.print()
@@ -998,8 +996,8 @@ def apply_cmd(fix_file: str) -> None:
     if not corrected_content.strip():
         # Fallback: strip all anima: lines
         corrected_content = "\n".join(
-            l for l in fix_text.splitlines()
-            if not l.startswith("# anima:")
+            line for line in fix_text.splitlines()
+            if not line.startswith("# anima:")
         ).lstrip("\n")
 
     if not target_file:
@@ -1210,7 +1208,7 @@ def trust_grant_cmd(action_type: str) -> None:
         console.print(f"  Capability:    {desc}")
     else:
         console.print(f"  Level {new} reached.")
-    console.print(f"\n[dim]Run 'anima tools status' to see all active tools.[/dim]")
+    console.print("\n[dim]Run 'anima tools status' to see all active tools.[/dim]")
 
 
 @trust.command("revoke")
@@ -1528,8 +1526,8 @@ def commits_cmd(limit: int) -> None:
     console.print()
     console.print(t)
     console.print(
-        f"[dim]To revert: git revert <hash>  "
-        f"  To view: git show <hash>[/dim]"
+        "[dim]To revert: git revert <hash>  "
+        "  To view: git show <hash>[/dim]"
     )
     console.print()
 
@@ -1741,7 +1739,7 @@ def frontdoor_install(revert_after: int) -> None:
         raise SystemExit(1) from exc
 
     click.echo("✓ Front-door LIVE and armed.")
-    click.echo(f"  Verify in a NEW terminal, then:  anima frontdoor commit")
+    click.echo("  Verify in a NEW terminal, then:  anima frontdoor commit")
     click.echo(f"  Auto-reverts in {revert_after}s if you do nothing.")
 
 
@@ -1766,7 +1764,7 @@ def frontdoor_status() -> None:
 
     state = LinuxFrontDoor().state()
     if state.installed:
-        click.echo(f"installed: yes")
+        click.echo("installed: yes")
         click.echo(f"entry_command: {state.entry_command}")
         click.echo(f"config_path: {state.config_path}")
     else:

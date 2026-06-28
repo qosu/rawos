@@ -64,7 +64,6 @@ def _compute_classification_metrics(
     from sklearn.metrics import (
         classification_report, f1_score, precision_score, recall_score,
     )
-    import numpy as np
 
     label_set = sorted(set(y_true) | set(y_pred))
     report = classification_report(
@@ -112,9 +111,8 @@ def run_classifier_benchmark(
     Evaluate classifier on all examples using 5-fold stratified CV.
     If classifier is None, loads from disk (must exist).
     """
-    import json as _json
     from sklearn.model_selection import StratifiedKFold, cross_val_predict
-    from anima.inference.features import build_feature_matrix, domain_to_label, label_to_domain
+    from anima.inference.features import build_feature_matrix
 
     contexts = [ex["behavioral_context"] for ex in examples]
     y_true_str = [ex["true_domain"] for ex in examples]

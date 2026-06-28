@@ -5,9 +5,7 @@ Tool definitions follow the OpenAI function-calling format for DeepSeek.
 """
 from __future__ import annotations
 
-import json
 import logging
-import os
 import shlex
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,6 +17,7 @@ from anima.config import settings
 from anima.kernel.arch import get_arch
 from anima.kernel.sandbox import BashResult, PathTraversalError, run_bash, run_bash_in_container, validate_path
 from anima.kernel import capability_gate as _capability_gate
+import ipaddress
 from anima.kernel import output_guard as _output_guard
 
 log = logging.getLogger("anima.tools")
@@ -74,7 +73,6 @@ def _is_destructive(cmd: str) -> bool:
 # ---------------------------------------------------------------------------
 
 async def _bash(params: dict[str, Any], workdir: str) -> ToolResult:
-    import time
     command = params.get("command", "").strip()
     if not command:
         return ToolResult(output="error: command is required", success=False, duration_ms=0)
@@ -269,7 +267,7 @@ async def _read_file(params: dict[str, Any], workdir: str) -> ToolResult:
     try:
         content = full_path.read_text(encoding="utf-8", errors="replace")
         if len(content) > 50_000:
-            content = content[:50_000] + "\n[file truncated — read first 50 000 chars]";
+            content = content[:50_000] + "\n[file truncated — read first 50 000 chars]"
         duration_ms = int((time.monotonic() - start) * 1000)
         return ToolResult(output=content, success=True, duration_ms=duration_ms)
     except OSError as e:
@@ -315,7 +313,7 @@ async def _list_files(params: dict[str, Any], workdir: str) -> ToolResult:
 
 # SHP.3 I-SEC8 — SSRF deny list: RFC1918 + loopback + link-local + IPv6 equivalents.
 # _ssrf_blocked_url() must be called before every outbound HTTP request.
-_SSRF_BLOCKED_NETWORKS: "list[ipaddress.IPv4Network | ipaddress.IPv6Network]" = []
+_SSRF_BLOCKED_NETWORKS: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
 
 def _build_ssrf_blocklist() -> None:
     """Populate _SSRF_BLOCKED_NETWORKS once at import time."""
@@ -432,6 +430,7 @@ async def _fetch_url(params: dict[str, Any], workdir: str) -> ToolResult:
 
 
 async def _deploy(params: dict[str, Any], workdir: str) -> ToolResult:
+    import time
     t0 = time.monotonic()
     entry_point = str(params.get("entry_point", "index.html"))
     # Sanitise: no path traversal, no absolute paths
@@ -1123,7 +1122,8 @@ async def _manage_owned_resource(params: dict, workdir: str) -> "ToolResult":
     action="reap"           -- hard-delete trash older than retention window
     """
     import time as _time
-    ctx = _get_agent_context()
+    from anima.kernel.billing_context import get_billing_context as _get_billing_ctx
+    ctx = _get_billing_ctx()
     if ctx is None:
         return ToolResult(output="manage_owned_resource: no active agent context", success=False, duration_ms=0)
     user_id: str = ctx["user_id"]
@@ -1254,7 +1254,8 @@ async def _manage_venv(params: dict, workdir: str) -> "ToolResult":
     action="status"          -- show graduation + recent venv history
     """
     import time as _time
-    ctx = _get_agent_context()
+    from anima.kernel.billing_context import get_billing_context as _get_billing_ctx
+    ctx = _get_billing_ctx()
     if ctx is None:
         return ToolResult(output="manage_venv: no active agent context", success=False, duration_ms=0)
     user_id: str = ctx["user_id"]
@@ -1287,7 +1288,7 @@ async def _manage_venv(params: dict, workdir: str) -> "ToolResult":
             return ToolResult(output=f"venv propose failed: {exc}", success=False, duration_ms=_ms())
         if outcome.auto_applied:
             return ToolResult(
-                output=f"auto-applied: venv swapped to candidate (service restarting)",
+                output="auto-applied: venv swapped to candidate (service restarting)",
                 success=True, duration_ms=_ms(),
             )
         return ToolResult(
@@ -1307,7 +1308,7 @@ async def _manage_venv(params: dict, workdir: str) -> "ToolResult":
         except VenvStateError as exc:
             return ToolResult(output=f"single-flight conflict: {exc}", success=False, duration_ms=_ms())
         return ToolResult(
-            output=f"applied: venv swapped to candidate (service restarting)",
+            output="applied: venv swapped to candidate (service restarting)",
             success=True, duration_ms=_ms(),
         )
 

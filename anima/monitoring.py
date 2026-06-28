@@ -10,13 +10,9 @@ import time
 from typing import Awaitable, Callable
 
 from prometheus_client import (
-    CONTENT_TYPE_LATEST,
-    CollectorRegistry,
     Counter,
     Gauge,
     Histogram,
-    generate_latest,
-    REGISTRY,
 )
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -82,11 +78,16 @@ rate_limit_hits_total = Counter(
 # ---------------------------------------------------------------------------
 
 def _endpoint_group(path: str) -> str:
-    if path.startswith("/auth"):   return "auth"
-    if path.startswith("/intent"): return "intent"
-    if path.startswith("/projects"): return "projects"
-    if path.startswith("/admin"):  return "admin"
-    if path == "/health":          return "health"
+    if path.startswith("/auth"):
+        return "auth"
+    if path.startswith("/intent"):
+        return "intent"
+    if path.startswith("/projects"):
+        return "projects"
+    if path.startswith("/admin"):
+        return "admin"
+    if path == "/health":
+        return "health"
     return "other"
 
 

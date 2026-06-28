@@ -23,7 +23,7 @@ from typing import Any
 
 import anima.db as db
 from anima.config import settings
-from anima.context.user_model import get_user_model, rebuild_user_model
+from anima.context.user_model import rebuild_user_model
 from anima.kernel import llm_client
 
 log = logging.getLogger("anima.inference.intent_engine")
@@ -137,7 +137,6 @@ def _rule_infer(model: dict[str, Any]) -> InferredIntent | None:
     # High-confidence patterns
     if len(intent_messages) >= 3:
         # Multiple intents → active session → describe what they're doing
-        last_intent = intent_messages[0]
         conf = min(0.5 + len(intent_messages) * 0.05, 0.85)
         return InferredIntent(
             goal=f"{primary_domain} work on {stack_str} project",

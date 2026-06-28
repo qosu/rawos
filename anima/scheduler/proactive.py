@@ -39,8 +39,7 @@ from anima.inference.intent_engine import InferredIntent, infer_intent
 from anima.evaluation.metrics import log_inference, link_inference_to_artifact
 from anima import monitoring
 from anima.models import (
-    Agent, AgentStatus, Artifact, ArtifactType,
-    Event, EventType, Intent, IntentStatus,
+    Agent, AgentStatus, Intent, IntentStatus,
     Memory, MemoryTier, MessageRole,
 )
 
@@ -1034,7 +1033,6 @@ def _record_git_commits(
     if not commit_results:
         return
 
-    now = int(time.time())
     with db._conn() as conn:
         for ev in commit_results:
             output = ev.get("output", "")

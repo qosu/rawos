@@ -65,7 +65,7 @@ class ServerAnomaly:
 
     def to_context_summary(self) -> str:
         parts = [
-            f"[SERVER_SCAN — autonomous anima observation]",
+            "[SERVER_SCAN — autonomous anima observation]",
             f"Anomaly type: {self.kind}",
             f"Detail: {self.detail}",
         ]

@@ -5,6 +5,10 @@ commands previously inlined in context/server_scanner.py and
 kernel/sandbox.py — Stage A is a zero-behavior-change extraction.
 """
 from __future__ import annotations
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from anima.kernel.arch.base import FrontDoorState
 
 import dataclasses
 import json
@@ -298,7 +302,7 @@ class LinuxFrontDoor:
         except FileNotFoundError:
             pass
 
-    def state(self) -> "FrontDoorState":
+    def state(self) -> FrontDoorState:
         from anima.kernel.arch.base import FrontDoorState
         if not self._dropin.exists():
             return FrontDoorState(
@@ -354,7 +358,6 @@ class LinuxFrontDoor:
         Otherwise copies the backup back.
         """
         import shutil
-        from pathlib import Path
         if snapshot == self._ABSENT_SENTINEL:
             try:
                 self._dropin.unlink()

@@ -13,11 +13,10 @@ from __future__ import annotations
 
 import json
 import logging
-import time
-from datetime import date, datetime, timezone
+from datetime import date
 
 import anima.db as db
-from anima.study.config import HYPOTHESES, get_config, get_study_day
+from anima.study.config import get_config, get_study_day
 
 log = logging.getLogger("anima.study.tracker")
 

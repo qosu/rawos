@@ -7,7 +7,6 @@ All writes are synchronous (SQLite is thread-safe in WAL mode).
 from __future__ import annotations
 
 import logging
-import time
 
 import anima.db as db
 

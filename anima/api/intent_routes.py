@@ -21,7 +21,6 @@ from anima import monitoring
 from anima.api.deps import current_user
 from anima.api.run_registry import Run, registry
 from anima.config import settings
-from anima.kernel import agent_loop
 from anima.kernel import orchestrator, context_builder, memory_index
 from anima.kernel.summarizer import summarize_memories
 from anima.models import (
